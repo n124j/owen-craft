@@ -7,3 +7,9 @@ dist/
 # Manually built copy with real config baked in — redundant now that
 # build.js generates dist/index.html; safe to delete
 index.html
+
+# wrangler files
+.wrangler
+.dev.vars*
+!.dev.vars.example
+!.env.example
