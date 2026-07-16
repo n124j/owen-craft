@@ -52,4 +52,8 @@ fs.mkdirSync(path.join(here, 'dist'), { recursive: true });
 fs.writeFileSync(path.join(here, 'dist', 'index.html'), html);
 const sp = path.join(here, 'voxelcraft-singleplayer.html');
 if (fs.existsSync(sp)) fs.copyFileSync(sp, path.join(here, 'dist', 'voxelcraft-singleplayer.html'));
+// Cloudflare Pages honours this file: never let browsers cache the HTML,
+// so every deploy reaches phones immediately (assets from CDNs still cache).
+fs.writeFileSync(path.join(here, 'dist', '_headers'),
+  '/*\n  Cache-Control: no-store\n');
 console.log('Built dist/index.html (' + html.length + ' chars) — deploy the dist folder.');

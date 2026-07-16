@@ -175,7 +175,7 @@
 </div>
 
 <div id="waterfx"></div>
-<div id="copyright">© 2026 aipioneerlab.com</div>
+<div id="copyright">© 2026 aipioneerlab.com · v7</div>
 
 <div id="hud">
   <div id="crosshair"></div>
@@ -211,7 +211,7 @@ import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signO
 import { getDatabase, ref, set, update, remove, push, query, limitToLast,
          onChildAdded, onChildChanged, onChildRemoved, onDisconnect }
   from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
-import { signInWithRedirect }
+import { signInWithRedirect, getRedirectResult }
   from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
 
 /* ==================================================================
@@ -1630,15 +1630,37 @@ const Net = {
     this.auth = getAuth(app);
     this.db = getDatabase(app);
     onAuthStateChanged(this.auth, u => { this.user = u; uiOnAuth(u); });
+    // surface errors from a redirect-based sign-in (the fallback path)
+    getRedirectResult(this.auth).catch(e => {
+      elAuthErr.textContent = 'Sign-in failed: ' + (e.code || e.message);
+    });
     return true;
   },
 
+  /**
+   * Popup first on every platform: since Safari 16.1 / iOS, tracking
+   * prevention breaks the redirect flow (the login succeeds at Google but
+   * the game never receives it), while the popup flow works. Redirect is
+   * kept only as a fallback for browsers that block the popup outright.
+   */
   async signIn() {
+    const provider = new GoogleAuthProvider();
+    elAuthErr.textContent = 'Opening Google sign-in…';
     try {
-      const provider = new GoogleAuthProvider();
-      if (IS_TOUCH) await signInWithRedirect(this.auth, provider); // popups are unreliable on mobile
-      else await signInWithPopup(this.auth, provider);
-    } catch (e) { elAuthErr.textContent = 'Sign-in failed: ' + (e.code || e.message); }
+      await signInWithPopup(this.auth, provider);
+      elAuthErr.textContent = '';
+    } catch (e) {
+      if (e && (e.code === 'auth/popup-blocked' ||
+                e.code === 'auth/operation-not-supported-in-this-environment')) {
+        try { await signInWithRedirect(this.auth, provider); return; }
+        catch (e2) { e = e2; }
+      }
+      if (e && e.code === 'auth/popup-closed-by-user') {
+        elAuthErr.textContent = 'Sign-in window was closed — tap to try again.';
+        return;
+      }
+      elAuthErr.textContent = 'Sign-in failed: ' + (e.code || e.message);
+    }
   },
 
   async signOutAll() {
