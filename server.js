@@ -15,6 +15,9 @@ const TYPES = {
   '.js': 'text/javascript; charset=utf-8',
   '.json': 'application/json',
   '.css': 'text/css',
+  '.svg': 'image/svg+xml',
+  '.txt': 'text/plain; charset=utf-8',
+  '.xml': 'application/xml',
 };
 
 http.createServer((req, res) => {

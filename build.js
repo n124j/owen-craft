@@ -52,6 +52,12 @@ fs.mkdirSync(path.join(here, 'dist'), { recursive: true });
 fs.writeFileSync(path.join(here, 'dist', 'index.html'), html);
 const sp = path.join(here, 'voxelcraft-singleplayer.html');
 if (fs.existsSync(sp)) fs.copyFileSync(sp, path.join(here, 'dist', 'voxelcraft-singleplayer.html'));
+
+// SEO assets — plain copies, no token substitution needed.
+for (const f of ['og-image.svg', 'robots.txt', 'sitemap.xml']) {
+  const src = path.join(here, f);
+  if (fs.existsSync(src)) fs.copyFileSync(src, path.join(here, 'dist', f));
+}
 // Cloudflare Pages honours this file: never let browsers cache the HTML,
 // so every deploy reaches phones immediately (assets from CDNs still cache).
 fs.writeFileSync(path.join(here, 'dist', '_headers'),
