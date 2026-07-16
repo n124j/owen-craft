@@ -125,6 +125,25 @@
   #copyright { position:fixed; right:12px; bottom:8px; z-index:30; pointer-events:none;
     color:rgba(255,255,255,.55); font:11px Verdana, sans-serif;
     text-shadow:1px 1px 2px rgba(0,0,0,.8); }
+
+  /* ---------- daily goal banner + inventory ---------- */
+  #goal { position:absolute; left:50%; top:10px; transform:translateX(-50%);
+    background:rgba(8,12,20,.65); border:1px solid rgba(255,215,110,.55); color:#ffd76e;
+    padding:6px 18px; border-radius:8px; font:14px Verdana, sans-serif;
+    text-shadow:1px 1px 2px #000; white-space:nowrap; }
+  #goal.done { color:#8fd15f; border-color:rgba(143,209,95,.6); }
+  body.touch #goal { top:62px; font-size:12px; max-width:86vw; white-space:normal;
+    text-align:center; }
+  #inv { position:absolute; left:10px; top:128px; display:none;
+    background:rgba(8,12,20,.72); color:#e8f0fa; font:13px/1.7 Consolas, monospace;
+    padding:10px 14px; border-radius:8px; min-width:210px; }
+  #inv b { color:#ffd76e; }
+  #inv .tool { color:#9fd18f; }
+  #inv .fx { margin-top:6px; color:#7fd4ff; }
+  #inv .dim { color:#8fa4bd; }
+  body.touch #inv { top:226px; }
+  #btnInv { left:10px; top:172px; }
+  #goalMenu { color:#ffd76e; }
   body.touch #chat { bottom:236px; width:46vw; }
   body.touch #chatlog { max-height:120px; }
   @media (max-width:700px) {
@@ -164,24 +183,27 @@
       <div><b>Move</b> W A S D / Arrows &nbsp;·&nbsp; <b>Jump</b> Space</div>
       <div><b>Sprint</b> Shift &nbsp;·&nbsp; <b>Sneak</b> Ctrl</div>
       <div><b>Break block</b> Left click &nbsp;·&nbsp; <b>Place block</b> Right click</div>
-      <div><b>Choose block</b> 1–9 or mouse wheel &nbsp;·&nbsp; <b>Chat</b> T</div>
+      <div><b>Choose block</b> 1–9 or mouse wheel &nbsp;·&nbsp; <b>Chat</b> T &nbsp;·&nbsp; <b>Inventory</b> I</div>
       <div><b>View distance</b> [ and ] &nbsp;·&nbsp; <b>Pause</b> Esc &nbsp;·&nbsp; <b>Sound</b> M &nbsp;·&nbsp; <b>Map</b> N</div>
       <div><b>Controller</b> Sticks move/look &nbsp;·&nbsp; A jump &nbsp;·&nbsp; RT mine &nbsp;·&nbsp; LT place</div>
     </div>
     <button id="playBtn" disabled>Loading…</button>
     <div id="loadMsg">Preparing world…</div>
+    <div id="goalMenu" class="sub"></div>
     <button id="signoutBtn" class="linkbtn">Sign out</button>
   </div>
 </div>
 
 <div id="waterfx"></div>
-<div id="copyright">© 2026 aipioneerlab.com · v7</div>
+<div id="copyright">© 2026 aipioneerlab.com · v8</div>
 
 <div id="hud">
   <div id="crosshair"></div>
   <div id="info"></div>
   <canvas id="map" width="160" height="160"></canvas>
   <div id="players"></div>
+  <div id="goal"></div>
+  <div id="inv"></div>
   <div id="selname"></div>
   <div id="hotbar"></div>
   <div id="chat">
@@ -196,6 +218,7 @@
     <button id="btnChat" class="tbtn small">💬</button>
     <button id="btnPause" class="tbtn small">⏸</button>
     <button id="btnMute" class="tbtn small">🔊</button>
+    <button id="btnInv" class="tbtn small">🎒</button>
   </div>
 </div>
 
@@ -208,7 +231,7 @@ import * as THREE from 'three';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut }
   from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js';
-import { getDatabase, ref, set, update, remove, push, query, limitToLast,
+import { getDatabase, ref, set, update, remove, push, query, limitToLast, get,
          onChildAdded, onChildChanged, onChildRemoved, onDisconnect }
   from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-database.js';
 import { signInWithRedirect, getRedirectResult }
@@ -264,7 +287,7 @@ const NUM_BLOCKS = 27;
 const BLOCK_NAMES = ['Air','Grass','Dirt','Stone','Sand','Sandstone','Snow',
   'Snowy Grass','Water','Oak Log','Oak Leaves','Pine Log','Pine Needles','Cactus',
   'Planks','Dark Planks','Cobblestone','Path','Farmland','Bedrock','Ice','Gravel',
-  'Rose','Dandelion','Tall Grass','Dead Bush','Wheat'];
+  'Rose','Marigold','Tall Grass','Dead Bush','Wheat'];
 
 // Texture layers (index into the array texture)
 // 0 grass_top 1 grass_side 2 dirt 3 stone 4 sand 5 sandstone 6 snow 7 snowgrass_side
@@ -1258,6 +1281,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'BracketRight') setRenderDist(CFG.renderDist + 1);
   if (e.code === 'KeyM' && locked) SND.toggleMute();
   if (e.code === 'KeyN' && locked) MiniMap.toggle();
+  if (e.code === 'KeyI' && locked) Inv.toggle();
   if (e.code === 'Space') e.preventDefault();
 });
 window.addEventListener('keyup', e => { keys[KEYALIAS[e.code] || e.code] = false; });
@@ -1287,7 +1311,8 @@ function updatePlayer(dt) {
   player.crouch = !!(keys.ControlLeft || keys.ControlRight) && !player.inWater;
   player.sprint = (!!(keys.ShiftLeft || keys.ShiftRight) || touchIn.sprint || padIn.sprint)
     && f > 0 && !player.crouch;
-  const speed = player.inWater ? 2.6 : player.crouch ? 1.7 : player.sprint ? 7.0 : 4.4;
+  const speed = (player.inWater ? 2.6 : player.crouch ? 1.7 : player.sprint ? 7.0 : 4.4)
+    * (Inv.items['Speed Boots'] ? 1.2 : 1);
 
   const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
   let tx = (-sy * f + cy * s), tz = (-cy * f - sy * s);
@@ -1385,24 +1410,30 @@ let hotbarSel = 0;
 
 window.addEventListener('contextmenu', e => e.preventDefault());
 
+/** Interaction reach — the Iron Pickaxe extends it. */
+function reachDist() { return Inv.items['Iron Pickaxe'] ? 8 : 6; }
+
 /** Break the block under the crosshair (mouse click or touch button). */
 function doBreak() {
   if (!locked || Chat.open) return;
-  const hit = raycast(6);
+  const hit = raycast(reachDist());
   if (!hit || hit.id === B.BEDROCK) return;
   SND.dig(hit.id);
   ChunkManager.setBlock(hit.x, hit.y, hit.z, B.AIR);
   Net.sendEdit(hit.x, hit.y, hit.z, B.AIR);
-  if (CROSS[ChunkManager.getBlock(hit.x, hit.y + 1, hit.z)]) {
+  Inv.addItem(BLOCK_NAMES[hit.id]);
+  const aboveId = ChunkManager.getBlock(hit.x, hit.y + 1, hit.z);
+  if (CROSS[aboveId]) {
     ChunkManager.setBlock(hit.x, hit.y + 1, hit.z, B.AIR);
     Net.sendEdit(hit.x, hit.y + 1, hit.z, B.AIR);
+    Inv.addItem(BLOCK_NAMES[aboveId]);
   }
 }
 
 /** Place the held block against the face under the crosshair. */
 function doPlace() {
   if (!locked || Chat.open) return;
-  const hit = raycast(6);
+  const hit = raycast(reachDist());
   if (!hit) return;
   const px = hit.x + hit.nx, py = hit.y + hit.ny, pz = hit.z + hit.nz;
   const cur = ChunkManager.getBlock(px, py, pz);
@@ -1429,7 +1460,7 @@ const outline = new THREE.LineSegments(
 outline.visible = false;
 scene.add(outline);
 function updateOutline() {
-  const hit = locked ? raycast(6) : null;
+  const hit = locked ? raycast(reachDist()) : null;
   if (hit) {
     outline.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
     outline.visible = true;
@@ -1689,6 +1720,11 @@ const Net = {
     onChildChanged(ed, s => this.onEdits(s.key, s.val()));
 
     onChildAdded(query(ref(this.db, 'arena/chat'), limitToLast(40)), s => Chat.add(s.val()));
+
+    // restore this player's inventory + today's goal progress
+    get(ref(this.db, 'players/' + uid + '/inv'))
+      .then(s => Inv.load(s.val()))
+      .catch(() => {});
   },
 
   onPlayer(uid, d) {
@@ -2095,6 +2131,247 @@ const MiniMap = {
 MiniMap.init();
 
 /* ================================================================== */
+/*  ITEMS — collectible tools scattered deterministically in the      */
+/*  world (same places for every player), INV — persistent inventory, */
+/*  GOALS — one shared goal per day, derived from the UTC date.       */
+/* ================================================================== */
+
+// 12x12 pixel-art icons: x = head colour, o = handle colour
+const TOOL_DEFS = {
+  'Iron Pickaxe': { e: '⛏️', head: '#cfd6de', handle: '#8a5a2b', art: [
+    '.xxxxxxxxx..','x....o....x.','x...oo....x.','....o.......','...oo.......','...o........',
+    '..oo........','..o.........','.oo.........','.o..........','oo..........','............']},
+  'Golden Axe': { e: '🪓', head: '#e8c14a', handle: '#8a5a2b', art: [
+    '..xxxx......','.xxxxxx.....','.xxxxxo.....','..xx.o......','....oo......','....o.......',
+    '...oo.......','...o........','..oo........','..o.........','.oo.........','............']},
+  'Iron Shovel': { e: '⚒️', head: '#cfd6de', handle: '#8a5a2b', art: [
+    '....xx......','...xxxx.....','...xxxx.....','....xx......','....o.......','....o.......',
+    '....o.......','....o.......','....o.......','...ooo......','............','............']},
+  'Emerald Sword': { e: '🗡️', head: '#3ecf6a', handle: '#6b4a26', art: [
+    '.........xx.','........xxx.','.......xxx..','......xxx...','.....xxx....','....xxx.....',
+    '.o..xxx.....','..oxx.......','..oo........','.o.o........','oo..........','............']},
+  'Speed Boots': { e: '👢', head: '#b06a3a', handle: '#7a4a28', art: [
+    '............','............','..xx....xx..','..xx....xx..','..xx....xx..','..xx....xx..',
+    '..xxx...xxx.','..xxxx..xxxx','............','............','............','............']},
+};
+const TOOL_NAMES = Object.keys(TOOL_DEFS);
+
+function toolSprite(name) {
+  const def = TOOL_DEFS[name];
+  if (!def.tex) {
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 24;
+    const c = cv.getContext('2d');
+    def.art.forEach((row, y) => [...row].forEach((ch, x) => {
+      if (ch === '.') return;
+      c.fillStyle = ch === 'x' ? def.head : def.handle;
+      c.fillRect(x * 2, y * 2, 2, 2);
+    }));
+    def.tex = new THREE.CanvasTexture(cv);
+    def.tex.magFilter = THREE.NearestFilter;
+  }
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: def.tex, transparent: true }));
+  sp.scale.set(0.85, 0.85, 1);
+  return sp;
+}
+
+const Items = {
+  live: new Map(),          // "cx_cz" -> {sp, x, y, z, name, phase}
+  lastScan: 0,
+
+  /** Which tool (if any) a chunk contains — deterministic for all players. */
+  typeFor(cx, cz) {
+    const d = Math.hypot(cx * 16, cz * 16);
+    const density = d < 640 ? 0.12 : 0.05;   // more common near spawn
+    if (hash01(cx, cz, 442211) >= density) return null;
+    return TOOL_NAMES[(hash01(cx, cz, 887733) * TOOL_NAMES.length) | 0];
+  },
+
+  update(now) {
+    if (!spawned) return;
+    if (now - this.lastScan > 700) {
+      this.lastScan = now;
+      const pcx = Math.floor(player.pos.x) >> 4, pcz = Math.floor(player.pos.z) >> 4;
+      const R = CFG.simDist + 2;
+      for (let dx = -R; dx <= R; dx++) for (let dz = -R; dz <= R; dz++) {
+        const cx = pcx + dx, cz = pcz + dz, key = cx + '_' + cz;
+        if (this.live.has(key) || Inv.picked[key]) continue;
+        const name = this.typeFor(cx, cz);
+        if (!name) continue;
+        const wx = cx * 16 + 4 + (hash01(cx, cz, 133) * 8 | 0);
+        const wz = cz * 16 + 4 + (hash01(cx, cz, 233) * 8 | 0);
+        const sy = ChunkManager.surfaceY(wx, wz);
+        if (sy <= 0 || sy < CFG.seaLevel - 1) continue;  // unloaded chunk or deep water
+        const sp = toolSprite(name);
+        sp.position.set(wx + 0.5, sy + 1.6, wz + 0.5);
+        scene.add(sp);
+        this.live.set(key, { sp, x: wx + 0.5, y: sy + 1.6, z: wz + 0.5, name,
+                             phase: hash01(cx, cz, 7) * 6 });
+      }
+      for (const [key, it] of this.live) {               // drop far-away items
+        if (Math.hypot(it.x - player.pos.x, it.z - player.pos.z) > (R + 1) * 16) {
+          scene.remove(it.sp); it.sp.material.dispose(); this.live.delete(key);
+        }
+      }
+    }
+    for (const [key, it] of this.live) {                 // bob + pickup
+      it.sp.position.y = it.y + Math.sin(now / 350 + it.phase) * 0.18;
+      const dx = it.x - player.pos.x, dy = it.y - 0.8 - player.pos.y, dz = it.z - player.pos.z;
+      if (locked && dx * dx + dy * dy + dz * dz < 2.1) this.collect(key, it);
+    }
+  },
+
+  collect(key, it) {
+    scene.remove(it.sp);
+    this.live.delete(key);
+    Inv.picked[key] = 1;
+    Inv.addItem(it.name);
+    Goals.onTool();
+    SND.tone(0.15, 0.07, 660, 880);                      // pickup chime
+    SND.tone(0.12, 0.09, 880, 1320, 'sine', 0.06);
+    Chat.system('You found: ' + it.name + '!');
+    if (Net.joined) Net.sendChat('found a ' + it.name + '! ' + (TOOL_DEFS[it.name].e || ''));
+  },
+};
+
+const Inv = {
+  items: {}, picked: {}, open: false, dirty: false, lastSave: 0,
+
+  addItem(name, n = 1) {
+    this.items[name] = (this.items[name] || 0) + n;
+    this.dirty = true;
+    Goals.onCollect(name);
+    if (this.open) this.render();
+  },
+  count(name) { return this.items[name] || 0; },
+
+  toggle() {
+    this.open = !this.open;
+    elInv.style.display = this.open ? 'block' : 'none';
+    if (this.open) this.render();
+  },
+
+  render() {
+    elInv.textContent = '';
+    const title = document.createElement('b');
+    title.textContent = '🎒 Inventory';
+    elInv.appendChild(title);
+    const entries = Object.entries(this.items).filter(e => e[1] > 0)
+      .sort((a, b) => b[1] - a[1]);
+    if (!entries.length) {
+      const d = document.createElement('div');
+      d.className = 'dim';
+      d.textContent = 'Empty — break blocks, find tools!';
+      elInv.appendChild(d);
+    }
+    for (const [name, n] of entries.slice(0, 14)) {
+      const d = document.createElement('div');
+      if (TOOL_DEFS[name]) d.className = 'tool';
+      d.textContent = (TOOL_DEFS[name] ? TOOL_DEFS[name].e + ' ' : '▪ ') + name + ' ×' + n;
+      elInv.appendChild(d);
+    }
+    if (entries.length > 14) {
+      const d = document.createElement('div');
+      d.className = 'dim';
+      d.textContent = '…and ' + (entries.length - 14) + ' more';
+      elInv.appendChild(d);
+    }
+    const fx = [];
+    if (this.count('Iron Pickaxe')) fx.push('⛏️ reach +2');
+    if (this.count('Speed Boots')) fx.push('👢 speed +20%');
+    if (fx.length) {
+      const d = document.createElement('div');
+      d.className = 'fx';
+      d.textContent = fx.join('   ');
+      elInv.appendChild(d);
+    }
+  },
+
+  load(v) {
+    if (!v) return;
+    this.items = v.items || {};
+    this.picked = v.picked || {};
+    if (v.goalDate === Goals.dateKey && Goals.goal) {
+      Goals.progress = Math.min(Goals.goal.n, v.goalProgress || 0);
+      Goals.done = Goals.progress >= Goals.goal.n;
+    }
+    if (this.open) this.render();
+    Goals.render();
+  },
+
+  autosave(now) {
+    if (!this.dirty || !Net.joined || now - this.lastSave < 4000) return;
+    this.lastSave = now;
+    this.dirty = false;
+    update(ref(Net.db, 'players/' + Net.user.uid + '/inv'),
+      { items: this.items, picked: this.picked,
+        goalDate: Goals.dateKey, goalProgress: Goals.progress });
+  },
+};
+
+const GOALS = [
+  { text: 'Collect {n} Marigolds 🌼', item: 'Marigold', n: 5 },
+  { text: 'Collect {n} Roses 🌹', item: 'Rose', n: 5 },
+  { text: 'Harvest {n} Wheat 🌾', item: 'Wheat', n: 8 },
+  { text: 'Mine {n} Stone ⛏️', item: 'Stone', n: 15 },
+  { text: 'Chop {n} Oak Logs 🪵', item: 'Oak Log', n: 8 },
+  { text: 'Dig up {n} Sand 🏖️', item: 'Sand', n: 12 },
+  { text: 'Break {n} Cactus blocks 🌵', item: 'Cactus', n: 5 },
+  { text: 'Collect {n} Snow blocks ❄️', item: 'Snow', n: 8 },
+  { text: 'Find {n} tools 🎒', type: 'tool', n: 2 },
+  { text: 'Visit the Desert 🐪', type: 'visit', biome: 2, n: 1 },
+  { text: 'Visit the Snowy Tundra ☃️', type: 'visit', biome: 3, n: 1 },
+  { text: 'Swim in the Ocean 🌊', type: 'visit', biome: 4, n: 1 },
+];
+
+const Goals = {
+  goal: null, dateKey: '', progress: 0, done: false,
+
+  /** Same goal for every player worldwide: derived from the UTC date. */
+  pick() {
+    const key = new Date().toISOString().slice(0, 10);
+    if (key === this.dateKey) return;
+    this.dateKey = key;
+    let h = 0;
+    for (let i = 0; i < key.length; i++) h = (Math.imul(h, 131) + key.charCodeAt(i)) | 0;
+    this.goal = GOALS[((h ^ CFG.seed) >>> 0) % GOALS.length];
+    this.progress = 0;
+    this.done = false;
+    this.render();
+  },
+
+  text() { return this.goal ? this.goal.text.replace('{n}', this.goal.n) : ''; },
+  onCollect(name) { if (this.goal && this.goal.item === name) this.bump(1); },
+  onTool() { if (this.goal && this.goal.type === 'tool') this.bump(1); },
+  onVisit(biome) {
+    if (this.goal && this.goal.type === 'visit' && biome === this.goal.biome) this.bump(this.goal.n);
+  },
+
+  bump(k) {
+    if (this.done || !this.goal) return;
+    this.progress = Math.min(this.goal.n, this.progress + k);
+    Inv.dirty = true;
+    if (this.progress >= this.goal.n) {
+      this.done = true;
+      SND.tone(0.2, 0.12, 523, 0, 'square');             // little fanfare
+      SND.tone(0.2, 0.12, 659, 0, 'square', 0.12);
+      SND.tone(0.22, 0.22, 784, 0, 'square', 0.24);
+      Chat.system('🎉 Goal complete: ' + this.text());
+      if (Net.joined) Net.sendChat("🎉 completed today's goal: " + this.text());
+    }
+    this.render();
+  },
+
+  render() {
+    if (!this.goal) return;
+    elGoal.textContent = (this.done ? '✅ ' : '🎯 ') + "Today's Goal: " + this.text() +
+      (this.done ? ' — DONE!' : (this.goal.n > 1 ? '  ·  ' + this.progress + '/' + this.goal.n : ''));
+    elGoal.classList.toggle('done', this.done);
+    elGoalMenu.textContent = "🎯 Today's Goal: " + this.text();
+  },
+};
+
+/* ================================================================== */
 /*  UI — HUD, hotbar, pointer lock, main loop, boot                   */
 /* ================================================================== */
 
@@ -2112,6 +2389,9 @@ const elChatInput = document.getElementById('chatInput');
 const elPlayers = document.getElementById('players');
 const elName = document.getElementById('nameInput');
 const elCharGrid = document.getElementById('charGrid');
+const elGoal = document.getElementById('goal');
+const elGoalMenu = document.getElementById('goalMenu');
+const elInv = document.getElementById('inv');
 const phases = {
   signin: document.getElementById('phaseSignin'),
   char: document.getElementById('phaseChar'),
@@ -2294,6 +2574,7 @@ if (IS_TOUCH) {
   bind('btnChat', () => { if (locked) Chat.openBox(); }, null);
   bind('btnPause', () => setPlaying(false), null);
   bind('btnMute', () => SND.toggleMute(), null);
+  bind('btnInv', () => Inv.toggle(), null);
 }
 
 /* ------------- gamepad (Bluetooth / USB controllers) -------------- */
@@ -2411,6 +2692,9 @@ function frame(now) {
   pollGamepad(dt);
   SND.ambient(dt);
   MiniMap.update();
+  Goals.pick();
+  Items.update(now);
+  Inv.autosave(now);
   Net.sendState(now);
   Net.updateRemotes(dt);
 
@@ -2459,7 +2743,8 @@ function updateHud() {
   }
   const p = player.pos;
   const bio = ChunkManager.biomeAt(Math.floor(p.x), Math.floor(p.z));
-  const hit = raycast(6);
+  Goals.onVisit(bio);
+  const hit = raycast(reachDist());
   elInfo.innerHTML =
     'FPS <b>' + fps + '</b>   View ' + CFG.renderDist + ' chunks\n' +
     'XYZ  ' + p.x.toFixed(1) + ' / ' + p.y.toFixed(1) + ' / ' + p.z.toFixed(1) + '\n' +
