@@ -1,0 +1,7 @@
+services:
+    owencraft:
+        build: .
+        ports:
+            - '1108:8000'
+        env_file:
+            - .env

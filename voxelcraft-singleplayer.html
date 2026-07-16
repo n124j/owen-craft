@@ -1,0 +1,1506 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OwenCraft — Voxel World</title>
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html,body { width:100%; height:100%; overflow:hidden; background:#000;
+    font-family:'Segoe UI', Verdana, sans-serif; user-select:none; }
+  canvas { display:block; }
+
+  /* ---------- Start / pause overlay ---------- */
+  #overlay { position:fixed; inset:0; z-index:20; display:flex; flex-direction:column;
+    align-items:center; justify-content:center; gap:14px;
+    background:radial-gradient(ellipse at center, rgba(20,32,52,.93), rgba(5,8,16,.97)); color:#fff; }
+  #overlay h1 { font-size:52px; letter-spacing:3px; color:#8fd15f;
+    text-shadow:3px 3px 0 #2c4a1d, 6px 6px 12px rgba(0,0,0,.6); font-family:Verdana, sans-serif; }
+  #overlay .sub { color:#9db4d0; font-size:15px; margin-top:-6px; }
+  #overlay .controls { background:rgba(255,255,255,.06); border:1px solid rgba(255,255,255,.12);
+    border-radius:10px; padding:14px 26px; font-size:14px; line-height:1.85; color:#cfe0f4; }
+  #overlay .controls b { color:#ffd76e; display:inline-block; min-width:120px; }
+  #playBtn { margin-top:6px; font-size:20px; padding:12px 58px; cursor:pointer; color:#fff;
+    background:linear-gradient(#6fbf44,#4e9330); border:2px solid #2c4a1d; border-radius:8px;
+    text-shadow:1px 1px 0 rgba(0,0,0,.4); }
+  #playBtn:hover:not(:disabled) { filter:brightness(1.12); }
+  #playBtn:disabled { filter:grayscale(.8) brightness(.7); cursor:wait; }
+  #loadMsg { font-size:13px; color:#7f95b3; min-height:18px; }
+
+  /* ---------- HUD ---------- */
+  #hud { position:fixed; inset:0; z-index:10; pointer-events:none; display:none; }
+  #crosshair { position:absolute; left:50%; top:50%; width:22px; height:22px;
+    transform:translate(-50%,-50%); opacity:.85; }
+  #crosshair::before, #crosshair::after { content:''; position:absolute; background:#fff;
+    mix-blend-mode:difference; }
+  #crosshair::before { left:50%; top:0; width:2px; height:100%; transform:translateX(-50%); }
+  #crosshair::after  { top:50%; left:0; height:2px; width:100%; transform:translateY(-50%); }
+
+  #info { position:absolute; left:10px; top:10px; background:rgba(8,12,20,.55); color:#e8f0fa;
+    font:13px/1.55 Consolas, monospace; padding:8px 12px; border-radius:6px; white-space:pre; }
+  #info .dim { color:#8fa4bd; }
+
+  #hotbar { position:absolute; left:50%; bottom:12px; transform:translateX(-50%);
+    display:flex; gap:4px; padding:4px; background:rgba(8,12,20,.55); border-radius:8px; }
+  .slot { width:52px; height:52px; border:2px solid rgba(255,255,255,.25); border-radius:6px;
+    background:rgba(0,0,0,.35); position:relative; display:flex; align-items:center; justify-content:center; }
+  .slot.sel { border-color:#ffd76e; box-shadow:0 0 10px rgba(255,215,110,.5); }
+  .slot canvas { width:40px; height:40px; image-rendering:pixelated; }
+  .slot .key { position:absolute; left:3px; top:1px; font:10px Consolas, monospace; color:#cfd8e4; }
+
+  #selname { position:absolute; left:50%; bottom:74px; transform:translateX(-50%);
+    color:#fff; font:14px Verdana; text-shadow:1px 1px 2px #000; opacity:.9; }
+
+  #waterfx { position:fixed; inset:0; z-index:5; pointer-events:none; display:none;
+    background:rgba(24,60,150,.28); }
+</style>
+</head>
+<body>
+
+<div id="overlay">
+  <h1>OWENCRAFT</h1>
+  <div class="sub">An infinite voxel world — explore the village, forests, deserts, snow and seas</div>
+  <div class="controls">
+    <div><b>Move</b> W A S D &nbsp;·&nbsp; <b>Jump</b> Space</div>
+    <div><b>Sprint</b> Shift &nbsp;·&nbsp; <b>Sneak</b> Ctrl</div>
+    <div><b>Break block</b> Left click &nbsp;·&nbsp; <b>Place block</b> Right click</div>
+    <div><b>Choose block</b> 1–9 or mouse wheel</div>
+    <div><b>View distance</b> [ and ] &nbsp;·&nbsp; <b>Pause</b> Esc</div>
+  </div>
+  <button id="playBtn" disabled>Loading…</button>
+  <div id="loadMsg">Preparing world…</div>
+</div>
+
+<div id="waterfx"></div>
+
+<div id="hud">
+  <div id="crosshair"></div>
+  <div id="info"></div>
+  <div id="selname"></div>
+  <div id="hotbar"></div>
+</div>
+
+<script type="importmap">
+{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+
+/* ================================================================== */
+/*  OwenCraft — a fast single-file Minecraft-style voxel sandbox      */
+/*                                                                    */
+/*  Modules (in order):                                               */
+/*    TAB   — config, block registry, face/culling tables             */
+/*    TEX   — procedural texture atlas (pixel-art, no assets)         */
+/*    GEN   — pure world generation (also serialized into Workers)    */
+/*    MESH  — pure greedy mesher (solid / water / foliage)            */
+/*    ENGINE— renderer, shaders, ChunkManager, worker pool            */
+/*    PLAY  — player controller, physics, block interaction           */
+/*    LIFE  — villager NPCs, day/night cycle                          */
+/*    UI    — HUD, hotbar, main loop, boot                            */
+/* ================================================================== */
+
+//#TAB-BEGIN
+const CFG = {
+  seed: 20260711,
+  chunkSize: 16,
+  worldHeight: 256,
+  seaLevel: 62,
+  renderDist: 8,       // in chunks (adjustable with [ ])
+  simDist: 4,          // NPC simulation distance, chunks
+  gravity: -27,
+};
+
+// Block ids
+const B = { AIR:0, GRASS:1, DIRT:2, STONE:3, SAND:4, SANDSTONE:5, SNOW:6,
+  SNOWGRASS:7, WATER:8, LOG:9, LEAVES:10, PINELOG:11, PINELEAVES:12, CACTUS:13,
+  PLANKS:14, DARKPLANKS:15, COBBLE:16, PATH:17, FARMLAND:18, BEDROCK:19,
+  ICE:20, GRAVEL:21, FLOWER_R:22, FLOWER_Y:23, TALLGRASS:24, DEADBUSH:25, WHEAT:26 };
+const NUM_BLOCKS = 27;
+
+const BLOCK_NAMES = ['Air','Grass','Dirt','Stone','Sand','Sandstone','Snow',
+  'Snowy Grass','Water','Oak Log','Oak Leaves','Pine Log','Pine Needles','Cactus',
+  'Planks','Dark Planks','Cobblestone','Path','Farmland','Bedrock','Ice','Gravel',
+  'Rose','Dandelion','Tall Grass','Dead Bush','Wheat'];
+
+// Texture layers (index into the array texture)
+// 0 grass_top 1 grass_side 2 dirt 3 stone 4 sand 5 sandstone 6 snow 7 snowgrass_side
+// 8 water 9 log_side 10 log_top 11 pinelog_side 12 leaves 13 pineleaves
+// 14 cactus_side 15 cactus_top 16 planks 17 darkplanks 18 cobble 19 path
+// 20 farmland 21 bedrock 22 ice 23 gravel 24 flower_r 25 flower_y 26 tallgrass
+// 27 deadbush 28 wheat
+const NUM_LAYERS = 29;
+
+// Per-block face layers [+x,-x,+y,-y,+z,-z]; a number means "all faces"
+const FACE_DEF = { 1:[1,1,0,2,1,1], 2:2, 3:3, 4:4, 5:5, 6:6, 7:[7,7,6,2,7,7],
+  8:8, 9:[9,9,10,10,9,9], 10:12, 11:[11,11,10,10,11,11], 12:13,
+  13:[14,14,15,15,14,14], 14:16, 15:17, 16:18, 17:[2,2,19,2,2,2],
+  18:[2,2,20,2,2,2], 19:21, 20:22, 21:23, 22:24, 23:25, 24:26, 25:27, 26:28 };
+
+const FACELAYER = new Int16Array(NUM_BLOCKS * 6);
+const OPAQUE = new Uint8Array(NUM_BLOCKS);   // fully culls neighbours (also = collidable)
+const CROSS  = new Uint8Array(NUM_BLOCKS);   // X-shaped plants
+for (let id = 1; id < NUM_BLOCKS; id++) {
+  const f = FACE_DEF[id];
+  for (let k = 0; k < 6; k++) FACELAYER[id*6+k] = Array.isArray(f) ? f[k] : f;
+  if (id >= B.FLOWER_R && id <= B.WHEAT) CROSS[id] = 1;
+  else if (id !== B.WATER) OPAQUE[id] = 1;
+}
+const SOLID = OPAQUE;                        // collision = opaque blocks
+//#TAB-END
+
+/* ================================================================== */
+/*  TEX — procedural pixel-art texture atlas (DataArrayTexture)       */
+/* ================================================================== */
+const atlasData = new Uint8Array(NUM_LAYERS * 16 * 16 * 4);
+(function paintAtlas() {
+  const hpx = (x, y, s) => { // deterministic per-pixel hash -> [0,1)
+    let n = Math.imul(x, 374761393) + Math.imul(y, 668265263) + Math.imul(s, 974634749);
+    n = Math.imul(n ^ (n >>> 13), 1274126177); n ^= n >>> 16;
+    return (n >>> 0) / 4294967296;
+  };
+  const cl = v => v < 0 ? 0 : v > 255 ? 255 : v | 0;
+  // y is texture-space: 0 = bottom of the block face
+  const put = (l, x, y, r, g, b, a = 255) => {
+    const o = ((l * 16 + y) * 16 + x) * 4;
+    atlasData[o] = cl(r); atlasData[o+1] = cl(g); atlasData[o+2] = cl(b); atlasData[o+3] = a;
+  };
+  const fill = (l, fn) => {
+    for (let y = 0; y < 16; y++) for (let x = 0; x < 16; x++) {
+      const n = hpx(x + l * 61, y, 1789), c = fn(x, y, n);
+      put(l, x, y, c[0], c[1], c[2], c[3] === undefined ? 255 : c[3]);
+    }
+  };
+  const speck = (base, amp) => (x, y, n) =>
+    [base[0] + (n - .5) * amp, base[1] + (n - .5) * amp, base[2] + (n - .5) * amp];
+
+  fill(0, speck([106,170,64], 34));                                   // grass top
+  fill(1, (x,y,n) => y >= 13 ? [96+(n-.5)*30,160+(n-.5)*30,58]        // grass side
+        : y === 12 && n < .5 ? [100,164,60] : [134+(n-.5)*36,96+(n-.5)*26,67]);
+  fill(2, speck([134,96,67], 38));                                    // dirt
+  fill(3, (x,y,n) => { const v = n < .22 ? -26 : (n-.5)*18;           // stone
+        return [125+v,125+v,127+v]; });
+  fill(4, speck([220,208,164], 22));                                  // sand
+  fill(5, (x,y,n) => { const band = (y%5===0) ? -22 : 0;              // sandstone
+        return [216+(n-.5)*12+band,203+(n-.5)*12+band,155+band]; });
+  fill(6, speck([246,249,253], 10));                                  // snow
+  fill(7, (x,y,n) => y >= 12 ? [246+(n-.5)*8,249,253]                 // snowy grass side
+        : [134+(n-.5)*36,96+(n-.5)*26,67]);
+  fill(8, (x,y,n) => n < .12 ? [92,140,228] : [47+(n-.5)*14,93+(n-.5)*14,201+(n-.5)*20]); // water
+  fill(9, (x,y,n) => x%4===0 ? [80,62,38] : [104+(n-.5)*18,82+(n-.5)*14,50]);            // oak log
+  fill(10,(x,y,n) => { const d = Math.max(Math.abs(x-7.5), Math.abs(y-7.5));              // log top
+        return (d|0)%2===0 ? [168+(n-.5)*14,134,84] : [116,90,54]; });
+  fill(11,(x,y,n) => x%4===1 ? [42,30,18] : [62+(n-.5)*14,45+(n-.5)*10,28]);              // pine log
+  fill(12,(x,y,n) => n < .16 ? [34,68,26] : [58+(n-.5)*40,124+(n-.5)*44,42+(n-.5)*24]);   // leaves
+  fill(13,(x,y,n) => n < .18 ? [26,50,36] : [46+(n-.5)*24,86+(n-.5)*28,58+(n-.5)*18]);    // pine needles
+  fill(14,(x,y,n) => x%4===0 ? [38,82,32] : n<.12 ? [96,160,86] : [58+(n-.5)*18,118+(n-.5)*20,48]); // cactus side
+  fill(15,(x,y,n) => (Math.abs(x-7.5)<3 && Math.abs(y-7.5)<3) ? [96,152,84] : [58,116,48]);         // cactus top
+  fill(16,(x,y,n) => (y%4===3)||(y<4&&x===11)||(y>=4&&y<8&&x===3)||(y>=8&&y<12&&x===13)||(y>=12&&x===6)
+        ? [122,92,54] : [168+(n-.5)*16,133+(n-.5)*14,84+(n-.5)*12]);  // planks
+  fill(17,(x,y,n) => (y%4===3)||(y<4&&x===9)||(y>=8&&y<12&&x===4)
+        ? [62,42,26] : [94+(n-.5)*14,67+(n-.5)*12,44]);               // dark planks
+  fill(18,(x,y,n) => (x%5===0||y%5===0) ? [72,72,74] : [112+(n-.5)*44,112+(n-.5)*44,114+(n-.5)*44]); // cobble
+  fill(19, speck([150,126,84], 26));                                  // path
+  fill(20,(x,y,n) => y%3===0 ? [70,46,26] : [98+(n-.5)*20,64+(n-.5)*16,38]); // farmland
+  fill(21,(x,y,n) => n < .4 ? [34,34,36] : [64+(n-.5)*56,64+(n-.5)*56,66]);  // bedrock
+  fill(22,(x,y,n) => n < .14 ? [206,232,250] : [158+(n-.5)*16,200+(n-.5)*14,240]); // ice
+  fill(23, speck([127,124,120], 52));                                 // gravel
+  // ---- cross plants (transparent background) ----
+  fill(24,(x,y,n) => {                                                // rose
+    const dx = x-7.5, dy = y-9.5, d = dx*dx+dy*dy;
+    if (d < 2.5) return [230,214,64];
+    if (d < 8.5) return [198+(n-.5)*40,40,44];
+    if ((x===7||x===8) && y < 8) return [62,130,50];
+    return [0,0,0,0]; });
+  fill(25,(x,y,n) => {                                                // dandelion
+    const dx = x-7.5, dy = y-9.5, d = dx*dx+dy*dy;
+    if (d < 7.5) return [232+(n-.5)*20,206,58];
+    if ((x===7||x===8) && y < 8) return [62,130,50];
+    return [0,0,0,0]; });
+  fill(26,(x,y,n) => {                                                // tall grass
+    const seedh = hpx(x, 0, 555);
+    if (x%2===0 && y < 3 + seedh*11) return [78+(n-.5)*30,148+(n-.5)*40,58];
+    return [0,0,0,0]; });
+  fill(27,(x,y,n) => {                                                // dead bush
+    if (y > 11) return [0,0,0,0];
+    if (x===8 || (y>1 && Math.abs(x-8) === (y>>1)) ) return [128+(n-.5)*30,94,50];
+    return [0,0,0,0]; });
+  fill(28,(x,y,n) => {                                                // wheat
+    if (x%3===1 && y < 13) return y > 7 ? [212,182,86] : [168+(n-.5)*30,150,66];
+    return [0,0,0,0]; });
+})();
+
+/* ================================================================== */
+/*  GEN — pure world generation. Every function below is serialized   */
+/*  with fn.toString() into the terrain Web Workers, so this section  */
+/*  must reference only CFG, B and other GEN functions.               */
+/* ================================================================== */
+//#GEN-BEGIN
+function clampf(v, a, b) { return v < a ? a : v > b ? b : v; }
+function lerpf(a, b, t) { return a + (b - a) * t; }
+function sstep(a, b, x) { const t = clampf((x - a) / (b - a), 0, 1); return t * t * (3 - 2 * t); }
+
+function mulberry32(a) {
+  return function () {
+    a |= 0; a = a + 0x6D2B79F5 | 0;
+    let t = Math.imul(a ^ a >>> 15, 1 | a);
+    t = t + Math.imul(t ^ t >>> 7, 61 | t) ^ t;
+    return ((t ^ t >>> 14) >>> 0) / 4294967296;
+  };
+}
+
+function hash01(x, z, s) {
+  let h = Math.imul(x, 374761393) + Math.imul(z, 668265263) + Math.imul(s, 974634749);
+  h = Math.imul(h ^ (h >>> 13), 1274126177); h ^= h >>> 16;
+  return (h >>> 0) / 4294967296;
+}
+
+/** 2-D simplex noise, output roughly in [-1, 1]. */
+function makeSimplex(seed) {
+  const rng = mulberry32(seed | 0);
+  const perm = new Uint8Array(512);
+  const p = [];
+  for (let i = 0; i < 256; i++) p[i] = i;
+  for (let i = 255; i > 0; i--) { const j = (rng() * (i + 1)) | 0; const t = p[i]; p[i] = p[j]; p[j] = t; }
+  for (let i = 0; i < 512; i++) perm[i] = p[i & 255];
+  const GX = [1,-1,1,-1,1,-1,0,0,1,-1,0,0], GY = [1,1,-1,-1,0,0,1,-1,1,1,-1,-1];
+  const F2 = 0.5 * (Math.sqrt(3) - 1), G2 = (3 - Math.sqrt(3)) / 6;
+  return function (xin, yin) {
+    let n0 = 0, n1 = 0, n2 = 0;
+    const s = (xin + yin) * F2;
+    const i = Math.floor(xin + s), j = Math.floor(yin + s);
+    const t = (i + j) * G2;
+    const x0 = xin - (i - t), y0 = yin - (j - t);
+    const i1 = x0 > y0 ? 1 : 0, j1 = x0 > y0 ? 0 : 1;
+    const x1 = x0 - i1 + G2, y1 = y0 - j1 + G2;
+    const x2 = x0 - 1 + 2 * G2, y2 = y0 - 1 + 2 * G2;
+    const ii = i & 255, jj = j & 255;
+    let t0 = 0.5 - x0 * x0 - y0 * y0;
+    if (t0 > 0) { const g = perm[ii + perm[jj]] % 12; t0 *= t0; n0 = t0 * t0 * (GX[g] * x0 + GY[g] * y0); }
+    let t1 = 0.5 - x1 * x1 - y1 * y1;
+    if (t1 > 0) { const g = perm[ii + i1 + perm[jj + j1]] % 12; t1 *= t1; n1 = t1 * t1 * (GX[g] * x1 + GY[g] * y1); }
+    let t2 = 0.5 - x2 * x2 - y2 * y2;
+    if (t2 > 0) { const g = perm[ii + 1 + perm[jj + 1]] % 12; t2 *= t2; n2 = t2 * t2 * (GX[g] * x2 + GY[g] * y2); }
+    return 70 * (n0 + n1 + n2);
+  };
+}
+
+/**
+ * Builds the deterministic world generator: layered-noise terrain, biome
+ * blending, rivers, and the spawn village plan. Same object is built on the
+ * main thread (for NPC spawns / village info) and in each worker.
+ */
+function createGenerator(seed) {
+  const n1 = makeSimplex(seed * 7 + 1);   // continental
+  const n2 = makeSimplex(seed * 7 + 2);   // rolling hills
+  const n3 = makeSimplex(seed * 7 + 3);   // mountain mask / ridges
+  const n4 = makeSimplex(seed * 7 + 4);   // temperature
+  const n5 = makeSimplex(seed * 7 + 5);   // moisture
+  const n6 = makeSimplex(seed * 7 + 6);   // rivers
+  const n7 = makeSimplex(seed * 7 + 7);   // dunes / detail
+
+  function fbm(n, x, y, oct) {
+    let a = 1, f = 1, s = 0, norm = 0;
+    for (let o = 0; o < oct; o++) { s += a * n(x * f, y * f); norm += a; a *= 0.5; f *= 2; }
+    return s / norm;
+  }
+
+  /* ---------------- village plan (deterministic) ---------------- */
+  const vr = mulberry32((seed ^ 0x51ab7) | 0);
+  const vx = Math.floor(14 + vr() * 20) * (vr() < 0.5 ? -1 : 1);
+  const vz = Math.floor(14 + vr() * 20) * (vr() < 0.5 ? -1 : 1);
+  const FLAT_IN = 62, FLAT_OUT = 118, ROAD_LEN = 50;
+
+  function villageT(wx, wz) {
+    const dx = wx - vx, dz = wz - vz;
+    const d = Math.sqrt(dx * dx + dz * dz);
+    return sstep(FLAT_OUT, FLAT_IN, d);
+  }
+  function inRoad(wx, wz) {
+    return (Math.abs(wz - vz) <= 1 && Math.abs(wx - vx) <= ROAD_LEN) ||
+           (Math.abs(wx - vx) <= 1 && Math.abs(wz - vz) <= ROAD_LEN);
+  }
+
+  /* ------------------------- trees ------------------------------ */
+  function placeOak(set, wx, by, wz, r) {
+    const h = 4 + Math.floor(r * 3);
+    const top = by + h - 1;
+    for (let y = by; y <= top; y++) set(wx, y, wz, B.LOG, true);
+    for (let dy = -2; dy <= 1; dy++) {
+      const yy = top + dy, rad = dy < 0 ? 2 : 1;
+      for (let dx = -rad; dx <= rad; dx++) for (let dz = -rad; dz <= rad; dz++) {
+        if (dx === 0 && dz === 0 && dy <= 0) continue;
+        if (Math.abs(dx) === rad && Math.abs(dz) === rad && hash01(wx + dx, wz + dz, yy) < 0.5) continue;
+        set(wx + dx, yy, wz + dz, B.LEAVES, false);
+      }
+    }
+    set(wx, top + 2, wz, B.LEAVES, false);
+  }
+  function placePine(set, wx, by, wz, r) {
+    const h = 6 + Math.floor(r * 4);
+    const top = by + h - 1;
+    for (let y = by; y <= top; y++) set(wx, y, wz, B.PINELOG, true);
+    for (let l = 1; l <= h - 2; l++) {
+      const yy = top - l;
+      const rad = l % 2 === 1 ? 1 : Math.min(2, 1 + (l >> 1) % 2 + (l > 4 ? 1 : 0));
+      for (let dx = -rad; dx <= rad; dx++) for (let dz = -rad; dz <= rad; dz++) {
+        if (dx === 0 && dz === 0) continue;
+        if (Math.abs(dx) === rad && Math.abs(dz) === rad && rad > 1) continue;
+        set(wx + dx, yy, wz + dz, B.PINELEAVES, false);
+      }
+    }
+    set(wx, top + 1, wz, B.PINELEAVES, false);
+    set(wx, top, wz, B.PINELEAVES, false);
+  }
+  function placeCactus(set, wx, by, wz, r) {
+    const h = 1 + Math.floor(r * 3);
+    for (let y = by; y < by + h; y++) set(wx, y, wz, B.CACTUS, false);
+  }
+
+  /* -------------------- village structures ---------------------- */
+  function houseStruct(x0, z0, w, d, doorSide, rot) {
+    // doorSide: 0=-z 1=+z 2=-x 3=+x  (faces the road)
+    return {
+      minX: x0 - 1, maxX: x0 + w, minZ: z0 - 1, maxZ: z0 + d,
+      place(set) {
+        const x1 = x0 + w - 1, z1 = z0 + d - 1, y = 63;
+        // clear interior volume + floor
+        for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) {
+          for (let yy = y + 1; yy <= y + 8; yy++) set(x, yy, z, B.AIR, true);
+          set(x, y, z, B.PLANKS, true);
+        }
+        // walls
+        for (let yy = y + 1; yy <= y + 3; yy++) {
+          for (let x = x0; x <= x1; x++) { set(x, yy, z0, B.PLANKS, true); set(x, yy, z1, B.PLANKS, true); }
+          for (let z = z0; z <= z1; z++) { set(x0, yy, z, B.PLANKS, true); set(x1, yy, z, B.PLANKS, true); }
+          // log corners
+          set(x0, yy, z0, B.LOG, true); set(x1, yy, z0, B.LOG, true);
+          set(x0, yy, z1, B.LOG, true); set(x1, yy, z1, B.LOG, true);
+        }
+        // windows (air gaps) at eye height
+        for (let x = x0 + 2; x < x1 - 1; x += 2) { set(x, y + 2, z0, B.AIR, true); set(x, y + 2, z1, B.AIR, true); }
+        for (let z = z0 + 2; z < z1 - 1; z += 2) { set(x0, y + 2, z, B.AIR, true); set(x1, y + 2, z, B.AIR, true); }
+        // door (2-high gap)
+        const mx = (x0 + x1) >> 1, mz = (z0 + z1) >> 1;
+        if (doorSide === 0) { set(mx, y + 1, z0, B.AIR, true); set(mx, y + 2, z0, B.AIR, true); }
+        if (doorSide === 1) { set(mx, y + 1, z1, B.AIR, true); set(mx, y + 2, z1, B.AIR, true); }
+        if (doorSide === 2) { set(x0, y + 1, mz, B.AIR, true); set(x0, y + 2, mz, B.AIR, true); }
+        if (doorSide === 3) { set(x1, y + 1, mz, B.AIR, true); set(x1, y + 2, mz, B.AIR, true); }
+        // stepped roof
+        for (let x = x0 - 1; x <= x1 + 1; x++) for (let z = z0 - 1; z <= z1 + 1; z++)
+          set(x, y + 4, z, B.DARKPLANKS, true);
+        for (let x = x0 + 1; x <= x1 - 1; x++) for (let z = z0 + 1; z <= z1 - 1; z++)
+          set(x, y + 5, z, B.DARKPLANKS, true);
+      }
+    };
+  }
+  function wellStruct(cx, cz) {
+    return {
+      minX: cx - 2, maxX: cx + 2, minZ: cz - 2, maxZ: cz + 2,
+      place(set) {
+        for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++) {
+          const edge = Math.abs(dx) === 2 || Math.abs(dz) === 2;
+          if (edge) set(cx + dx, 63, cz + dz, B.COBBLE, true);
+          else { for (let y = 60; y <= 63; y++) set(cx + dx, y, cz + dz, B.WATER, true);
+                 set(cx + dx, 59, cz + dz, B.COBBLE, true); }
+        }
+        for (const [dx, dz] of [[-2,-2],[2,-2],[-2,2],[2,2]])
+          for (let y = 64; y <= 66; y++) set(cx + dx, y, cz + dz, B.LOG, true);
+        for (let dx = -2; dx <= 2; dx++) for (let dz = -2; dz <= 2; dz++)
+          set(cx + dx, 67, cz + dz, B.DARKPLANKS, true);
+      }
+    };
+  }
+  function farmStruct(x0, z0, w, d) {
+    return {
+      minX: x0, maxX: x0 + w - 1, minZ: z0, maxZ: z0 + d - 1,
+      place(set) {
+        const x1 = x0 + w - 1, z1 = z0 + d - 1, mz = (z0 + z1) >> 1;
+        for (let x = x0; x <= x1; x++) for (let z = z0; z <= z1; z++) {
+          const edge = x === x0 || x === x1 || z === z0 || z === z1;
+          if (edge) { set(x, 63, z, B.LOG, true); continue; }
+          if (z === mz) { set(x, 63, z, B.WATER, true); continue; }
+          set(x, 63, z, B.FARMLAND, true);
+          if (hash01(x, z, 991) < 0.85) set(x, 64, z, B.WHEAT, true);
+        }
+      }
+    };
+  }
+  function treeStruct(x, z, r) {
+    return { minX: x - 2, maxX: x + 2, minZ: z - 2, maxZ: z + 2,
+             place(set) { placeOak(set, x, 64, z, r); } };
+  }
+
+  const structures = [];
+  const npc = [];
+  (function buildVillage() {
+    structures.push(wellStruct(vx + 5, vz + 5));
+    // houses along both roads, on both sides
+    const slots = [];
+    for (let i = 0; i < 3; i++) {
+      const off = 9 + i * 14;
+      slots.push([vx + off, vz + 4, 0],  [vx + off, vz - 4, 1],
+                 [vx - off, vz + 4, 0],  [vx - off, vz - 4, 1],
+                 [vx + 4, vz + off, 2],  [vx - 4, vz + off, 3],
+                 [vx + 4, vz - off, 2],  [vx - 4, vz - off, 3]);
+    }
+    let placed = 0;
+    for (let i = 0; i < slots.length && placed < 8; i++) {
+      if (vr() < 0.38) continue;
+      const [sx, sz, side] = slots[i];
+      const w = 5 + ((vr() * 3) | 0), d = 5 + ((vr() * 3) | 0);
+      let x0, z0, door;
+      if (side === 0) { x0 = sx - (w >> 1); z0 = sz;        door = 0; }      // north of road, door -z
+      else if (side === 1) { x0 = sx - (w >> 1); z0 = sz - d + 1; door = 1; } // south, door +z
+      else if (side === 2) { x0 = sx;        z0 = sz - (d >> 1); door = 2; }  // east of z-road
+      else { x0 = sx - w + 1; z0 = sz - (d >> 1); door = 3; }
+      // keep off the roads
+      if (x0 - 1 <= vx + 1 && x0 + w >= vx - 1 && z0 - 1 <= vz + 1 && z0 + d >= vz - 1) continue;
+      structures.push(houseStruct(x0, z0, w, d, door));
+      placed++;
+    }
+    structures.push(farmStruct(vx - 14, vz + 6, 9, 7));
+    structures.push(farmStruct(vx + 6, vz - 13, 7, 9));
+    // village trees
+    for (let i = 0; i < 10; i++) {
+      const a = vr() * Math.PI * 2, rad = 22 + vr() * 26;
+      const tx = Math.round(vx + Math.cos(a) * rad), tz = Math.round(vz + Math.sin(a) * rad);
+      if (inRoad(tx, tz)) continue;
+      structures.push(treeStruct(tx, tz, vr()));
+    }
+    // villager spawn points
+    for (let i = 0; i < 8; i++) {
+      const a = vr() * Math.PI * 2, rad = 5 + vr() * 22;
+      npc.push([Math.round(vx + Math.cos(a) * rad), Math.round(vz + Math.sin(a) * rad)]);
+    }
+  })();
+
+  /* ------------------------- terrain ---------------------------- */
+  // Returns everything needed to build one column of blocks.
+  function column(wx, wz) {
+    const d0 = Math.sqrt(wx * wx + wz * wz);
+    const t = villageT(wx, wz);
+
+    const cont = fbm(n1, wx * 0.0016, wz * 0.0016, 4);
+    const oceanBias = clampf((wz - 400) / 600, 0, 1)           // ocean guaranteed to the south…
+                    - clampf((wz - 1800) / 800, 0, 1);         // …but land resumes beyond it
+    const spawnBoost = clampf((400 - d0) / 400, 0, 1) * 0.55;  // solid land around spawn
+    const ca = cont * 0.8 - oceanBias * 0.8 + spawnBoost;
+
+    // temperature: coherent low-frequency noise + east/west bias,
+    // tempered near spawn so the starting area stays mild plains
+    let temp = fbm(n4, wx * 0.0008, wz * 0.0008, 2) * 0.55 + clampf(wx / 850, -0.7, 0.7);
+    temp *= 1 - 0.85 * clampf((380 - d0) / 380, 0, 1);
+    const moist = fbm(n5, wx * 0.0013, wz * 0.0013, 3)
+                + sstep(120, 220, d0) * (1 - sstep(320, 500, d0)) * 0.3;  // forest belt near spawn
+
+    let hgt = 64 + ca * 20 + fbm(n2, wx * 0.009, wz * 0.009, 3) * 6;
+
+    // mountains (damped near spawn so the plains stay scenic)
+    const mm = Math.max(0, fbm(n3, wx * 0.0012, wz * 0.0012, 2));
+    const ridge = 1 - Math.abs(n3(wx * 0.0038, wz * 0.0038));
+    const damp = clampf((d0 - 180) / 250, 0, 1);
+    hgt += Math.pow(Math.max(0, mm - 0.18), 1.4) * ridge * ridge * 95 * damp;
+
+    // desert dunes
+    const desertW = sstep(0.3, 0.5, temp) * (1 - sstep(0.05, 0.2, moist));
+    hgt += desertW * Math.abs(n7(wx * 0.02, wz * 0.02)) * 5;
+
+    // oceans
+    const oceanW = 1 - sstep(-0.5, -0.15, ca);
+    if (oceanW > 0) hgt = lerpf(hgt, 46 + fbm(n2, wx * 0.01, wz * 0.01, 2) * 6, oceanW);
+
+    // rivers
+    if (t <= 0 && oceanW < 0.2) {
+      const rv = Math.abs(n6(wx * 0.0025, wz * 0.0025));
+      if (rv < 0.028) {
+        const rd = 1 - rv / 0.028;
+        hgt = Math.min(hgt, 63.5 - rd * rd * 4.6);
+      }
+    }
+
+    // village flattening
+    hgt = lerpf(hgt, 63, t);
+    const h = Math.round(clampf(hgt, 2, 200));
+
+    // biome selection
+    let biome;
+    if (t > 0.45) biome = 0;
+    else if (h < 60 || oceanW > 0.35) biome = 4;
+    else if (h <= 64 && ca < -0.04) biome = 5;
+    else if (temp < -0.28) biome = 3;
+    else if (temp > 0.3 && moist < 0.12) biome = 2;
+    else if (moist > 0.14) biome = 1;
+    else biome = 0;
+
+    // surface materials
+    let top, under, deep = B.STONE;
+    if (biome === 2) { top = B.SAND; under = B.SAND; deep = B.SANDSTONE; }
+    else if (biome === 3) { top = B.SNOWGRASS; under = B.DIRT; }
+    else if (biome === 5) { top = B.SAND; under = B.SAND; }
+    else if (biome === 4) { top = h >= 54 ? B.SAND : B.GRAVEL; under = h >= 54 ? B.SAND : B.GRAVEL; }
+    else { top = B.GRASS; under = B.DIRT; }
+    if (h < CFG.seaLevel && biome !== 4 && biome !== 5) { top = B.SAND; under = B.SAND; } // river beds
+    if (h >= 97 && biome !== 2) top = B.SNOW;                                             // snowcaps
+    if (t > 0.5 && inRoad(wx, wz) && h === 63) top = B.PATH;
+
+    const ice = biome === 3 && h < CFG.seaLevel && hash01(wx, wz, seed ^ 0xacef) < 0.45;
+    return { h, biome, top, under, deep, ice, t, oceanW };
+  }
+
+  return { column, structures, npc, villageT, inRoad, placeOak, placePine, placeCactus, vx, vz };
+}
+
+/**
+ * Generates one 16x16x256 chunk: terrain columns, water, decorations
+ * (trees / plants use a 3-block border buffer so features cross chunk
+ * seams), then any village structures that intersect this chunk.
+ */
+function genChunk(gen, cx, cz) {
+  const blocks = new Uint8Array(16 * 16 * 256);
+  const heights = new Uint8Array(256);
+  const biomes = new Uint8Array(256);
+  const x0 = cx * 16, z0 = cz * 16;
+  const SEA = CFG.seaLevel;
+
+  const colCache = new Map();
+  const col = (wx, wz) => {
+    const k = wx * 100003 + wz;
+    let c = colCache.get(k);
+    if (c === undefined) { c = gen.column(wx, wz); colCache.set(k, c); }
+    return c;
+  };
+
+  // ---- base terrain ----
+  for (let lx = 0; lx < 16; lx++) for (let lz = 0; lz < 16; lz++) {
+    const wx = x0 + lx, wz = z0 + lz;
+    const c = col(wx, wz);
+    const base = ((lx << 4) | lz) << 8;
+    const h = c.h;
+    blocks[base] = B.BEDROCK;
+    const stoneTop = h - 4;
+    for (let y = 1; y <= stoneTop; y++) blocks[base + y] = c.deep;
+    for (let y = Math.max(1, stoneTop + 1); y < h; y++) blocks[base + y] = c.under;
+    if (h >= 1) blocks[base + h] = c.top;
+    if (h < SEA) {
+      for (let y = h + 1; y <= SEA; y++) blocks[base + y] = B.WATER;
+      if (c.ice) blocks[base + SEA] = B.ICE;
+    }
+    heights[(lx << 4) | lz] = h;
+    biomes[(lx << 4) | lz] = c.biome;
+  }
+
+  // ---- clipped setter (used by trees + structures) ----
+  const set = (wx, y, wz, id, force) => {
+    const lx = wx - x0, lz = wz - z0;
+    if (lx < 0 || lx > 15 || lz < 0 || lz > 15 || y < 0 || y > 255) return;
+    const i = (((lx << 4) | lz) << 8) + y;
+    if (force || blocks[i] === B.AIR || blocks[i] === B.WATER) blocks[i] = id;
+  };
+
+  // ---- natural decorations (3-block buffer so trees cross seams) ----
+  for (let dx = -3; dx < 19; dx++) for (let dz = -3; dz < 19; dz++) {
+    const wx = x0 + dx, wz = z0 + dz;
+    const c = col(wx, wz);
+    if (c.h < SEA || c.t > 0) continue;               // no natural features in water / village
+    const local = dx >= 0 && dx < 16 && dz >= 0 && dz < 16;
+    const r = hash01(wx, wz, 7777);
+    const by = c.h + 1;
+    if (c.biome === 1) {                              // forest
+      if (c.top === B.GRASS && r < 0.028) gen.placeOak(set, wx, by, wz, hash01(wx, wz, 31));
+      else if (local && r > 0.90) set(wx, by, wz, B.TALLGRASS, false);
+      else if (local && r > 0.885) set(wx, by, wz, B.LEAVES, false);   // bushes
+    } else if (c.biome === 0) {                       // plains
+      if (c.top === B.GRASS && r < 0.0025) gen.placeOak(set, wx, by, wz, hash01(wx, wz, 31));
+      else if (local && c.top === B.GRASS) {
+        if (r > 0.955) set(wx, by, wz, B.TALLGRASS, false);
+        else if (r > 0.943) set(wx, by, wz, B.FLOWER_R, false);
+        else if (r > 0.931) set(wx, by, wz, B.FLOWER_Y, false);
+      }
+    } else if (c.biome === 3) {                       // snow
+      if (c.top === B.SNOWGRASS && r < 0.014) gen.placePine(set, wx, by, wz, hash01(wx, wz, 31));
+    } else if (c.biome === 2) {                       // desert
+      if (r < 0.004) gen.placeCactus(set, wx, by, wz, hash01(wx, wz, 31));
+      else if (local && r > 0.988) set(wx, by, wz, B.DEADBUSH, false);
+    }
+  }
+
+  // ---- village structures intersecting this chunk ----
+  const cx1 = x0 + 15, cz1 = z0 + 15;
+  for (const s of gen.structures) {
+    if (s.maxX < x0 || s.minX > cx1 || s.maxZ < z0 || s.minZ > cz1) continue;
+    s.place(set);
+  }
+
+  return { blocks, heights, biomes };
+}
+//#GEN-END
+
+/* ================================================================== */
+/*  MESH — pure greedy mesher. Produces three index/vertex sets per   */
+/*  chunk: opaque solids, transparent water, and X-shaped foliage.    */
+/*  Vertex format: position(3) + auvl(4) = (u, v, layer, shade).      */
+/*  UVs are world-space so merged quads tile via texture wrapping.    */
+/* ================================================================== */
+//#MESH-BEGIN
+const SHADE = [[0.80, 0.62], [1.00, 0.50], [0.72, 0.58]]; // per axis [+dir, -dir]
+const WATER_CODE = 1000;
+const _mask = new Int32Array(16 * 256);
+
+/**
+ * getB(lx,ly,lz) must accept lx/lz in [-1,16] and any ly, returning a block id.
+ * heights: Uint8Array(256) surface heights (used to find foliage quickly).
+ */
+function meshChunk(getB, heights) {
+  const out = {
+    op: { p: [], u: [], i: [] },
+    wa: { p: [], u: [], i: [] },
+    fo: { p: [], u: [], i: [] },
+  };
+  const dims = [16, 256, 16];
+  const x = [0, 0, 0], q = [0, 0, 0];
+
+  for (let d = 0; d < 3; d++) {
+    const u = (d + 1) % 3, v = (d + 2) % 3;
+    q[0] = q[1] = q[2] = 0; q[d] = 1;
+    const du = dims[u], dv = dims[v];
+
+    for (x[d] = -1; x[d] < dims[d];) {
+      // ---- build mask for the slice between x[d] and x[d]+1 ----
+      const slice = x[d];
+      let n = 0;
+      for (x[v] = 0; x[v] < dv; x[v]++) for (x[u] = 0; x[u] < du; x[u]++) {
+        const a = getB(x[0], x[1], x[2]);
+        const b = getB(x[0] + q[0], x[1] + q[1], x[2] + q[2]);
+        const aO = OPAQUE[a], bO = OPAQUE[b];
+        let m = 0;
+        if (aO && !bO) m = a;
+        else if (bO && !aO) m = -b;
+        else if (a === B.WATER && b !== B.WATER && !bO) m = WATER_CODE;
+        else if (b === B.WATER && a !== B.WATER && !aO) m = -WATER_CODE;
+        // faces owned by a block in a neighbouring chunk are that chunk's
+        // job — emitting them twice would z-fight along the seams
+        if (m > 0 && slice === -1) m = 0;
+        else if (m < 0 && slice === dims[d] - 1) m = 0;
+        _mask[n++] = m;
+      }
+      x[d]++;
+
+      // ---- greedy merge ----
+      n = 0;
+      for (let j = 0; j < dv; j++) {
+        for (let i = 0; i < du;) {
+          const c = _mask[n];
+          if (c === 0) { i++; n++; continue; }
+          let w = 1;
+          while (i + w < du && _mask[n + w] === c) w++;
+          let h = 1;
+          outer: for (; j + h < dv; h++)
+            for (let k = 0; k < w; k++)
+              if (_mask[n + k + h * du] !== c) break outer;
+          x[u] = i; x[v] = j;
+          emitQuad(out, d, u, v, c, x, w, h);
+          for (let l = 0; l < h; l++) for (let k = 0; k < w; k++) _mask[n + k + l * du] = 0;
+          i += w; n += w;
+        }
+      }
+    }
+  }
+
+  // ---- foliage (cross plants sit just above the surface) ----
+  for (let lx = 0; lx < 16; lx++) for (let lz = 0; lz < 16; lz++) {
+    const hs = heights[(lx << 4) | lz];
+    const yMax = Math.min(255, hs + 6);
+    for (let y = hs + 1; y <= yMax; y++) {
+      const id = getB(lx, y, lz);
+      if (!CROSS[id]) continue;
+      emitCross(out.fo, lx, y, lz, FACELAYER[id * 6]);
+    }
+  }
+  return out;
+}
+
+function emitQuad(out, d, u, v, code, x, w, h) {
+  const dir = code > 0 ? 1 : -1;
+  let id = Math.abs(code);
+  const isWater = id === WATER_CODE;
+  if (isWater) id = B.WATER;
+  const tgt = isWater ? out.wa : out.op;
+
+  const p0 = [x[0], x[1], x[2]];
+  const p1 = [x[0], x[1], x[2]]; p1[u] += w;
+  const p2 = [p1[0], p1[1], p1[2]]; p2[v] += h;
+  const p3 = [x[0], x[1], x[2]]; p3[v] += h;
+  const yOff = (isWater && d === 1 && dir > 0) ? -0.12 : 0;
+
+  const shade = SHADE[d][dir > 0 ? 0 : 1];
+  const face = d === 0 ? (dir > 0 ? 0 : 1) : d === 1 ? (dir > 0 ? 2 : 3) : (dir > 0 ? 4 : 5);
+  const layer = FACELAYER[id * 6 + face];
+  // texture axes: v always follows world-Y on side faces
+  const tu = d === 0 ? 2 : 0;
+  const tv = d === 2 ? 1 : (d === 0 ? 1 : 2);
+
+  const base = tgt.p.length / 3;
+  for (const p of [p0, p1, p2, p3]) {
+    tgt.p.push(p[0], p[1] + yOff, p[2]);
+    tgt.u.push(p[tu], p[tv], layer, shade);
+  }
+  if (dir > 0) tgt.i.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  else tgt.i.push(base, base + 2, base + 1, base, base + 3, base + 2);
+}
+
+function emitCross(tgt, x, y, z, layer) {
+  const quads = [
+    [[x, y, z],     [x + 1, y, z + 1]],
+    [[x, y, z + 1], [x + 1, y, z]],
+  ];
+  for (const [a, b] of quads) {
+    const base = tgt.p.length / 3;
+    tgt.p.push(a[0], y, a[2],  b[0], y, b[2],  b[0], y + 1, b[2],  a[0], y + 1, a[2]);
+    tgt.u.push(0, 0, layer, 1,  1, 0, layer, 1,  1, 1, layer, 1,  0, 1, layer, 1);
+    tgt.i.push(base, base + 1, base + 2, base, base + 2, base + 3);
+  }
+}
+//#MESH-END
+
+/* ================================================================== */
+/*  ENGINE — renderer, chunk materials, worker pool, ChunkManager     */
+/* ================================================================== */
+
+THREE.ColorManagement.enabled = false;   // keep raw sRGB values end-to-end
+const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
+renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
+renderer.setSize(window.innerWidth, window.innerHeight);
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 600);
+window.addEventListener('resize', () => {
+  camera.aspect = window.innerWidth / window.innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(window.innerWidth, window.innerHeight);
+});
+
+// ---- texture array atlas ----
+const atlasTex = new THREE.DataArrayTexture(atlasData, 16, 16, NUM_LAYERS);
+atlasTex.format = THREE.RGBAFormat;
+atlasTex.wrapS = atlasTex.wrapT = THREE.RepeatWrapping;
+atlasTex.magFilter = THREE.NearestFilter;
+atlasTex.minFilter = THREE.NearestFilter;
+atlasTex.generateMipmaps = false;
+atlasTex.needsUpdate = true;
+
+// ---- shared shader uniforms (one object => every chunk updates at once) ----
+const U = {
+  atlas:    { value: atlasTex },
+  daylight: { value: 1.0 },
+  fogColor: { value: new THREE.Color(0x87ceeb) },
+  fogNear:  { value: 60 },
+  fogFar:   { value: 120 },
+  time:     { value: 0 },
+};
+
+const CHUNK_VERT = /* glsl */`
+in vec4 auvl;
+out vec3 vUvl;
+out float vShade;
+out float vDist;
+void main() {
+  vUvl = auvl.xyz;
+  vShade = auvl.w;
+  vec4 mv = modelViewMatrix * vec4(position, 1.0);
+  vDist = -mv.z;
+  gl_Position = projectionMatrix * mv;
+}`;
+
+const CHUNK_FRAG = /* glsl */`
+uniform highp sampler2DArray atlas;
+uniform float daylight;
+uniform vec3 fogColor;
+uniform float fogNear;
+uniform float fogFar;
+uniform float time;
+in vec3 vUvl;
+in float vShade;
+in float vDist;
+out vec4 outColor;
+void main() {
+  vec2 uv = vUvl.xy;
+  #ifdef WATER
+    uv += vec2(time * 0.05, time * 0.037);
+  #endif
+  vec4 t = texture(atlas, vec3(uv, vUvl.z));
+  #ifdef FOLIAGE
+    if (t.a < 0.5) discard;
+  #endif
+  vec3 c = t.rgb * vShade * daylight;
+  c = mix(c, fogColor, smoothstep(fogNear, fogFar, vDist));
+  #ifdef WATER
+    outColor = vec4(c, 0.78);
+  #else
+    outColor = vec4(c, 1.0);
+  #endif
+}`;
+
+function chunkMaterial(defines, opts) {
+  return new THREE.ShaderMaterial(Object.assign({
+    glslVersion: THREE.GLSL3,
+    vertexShader: CHUNK_VERT,
+    fragmentShader: CHUNK_FRAG,
+    uniforms: U,
+    defines,
+  }, opts || {}));
+}
+const matOpaque  = chunkMaterial({});
+const matWater   = chunkMaterial({ WATER: 1 }, { transparent: true, depthWrite: false });
+const matFoliage = chunkMaterial({ FOLIAGE: 1 }, { side: THREE.DoubleSide });
+
+// ---- terrain worker pool (GEN section serialized into a Blob) ----
+const workerSrc =
+  'const CFG=' + JSON.stringify(CFG) + ';const B=' + JSON.stringify(B) + ';\n' +
+  [clampf, lerpf, sstep, mulberry32, hash01, makeSimplex, createGenerator, genChunk]
+    .map(f => f.toString()).join('\n') +
+  '\nconst gen=createGenerator(CFG.seed);' +
+  'self.onmessage=function(e){var d=e.data;var r=genChunk(gen,d.cx,d.cz);' +
+  'self.postMessage({cx:d.cx,cz:d.cz,blocks:r.blocks,heights:r.heights,biomes:r.biomes},' +
+  '[r.blocks.buffer,r.heights.buffer,r.biomes.buffer]);};';
+const workerURL = URL.createObjectURL(new Blob([workerSrc], { type: 'text/javascript' }));
+
+/* ------------------------- ChunkManager -------------------------- */
+const ChunkManager = {
+  store: new Map(),      // key -> {cx,cz,blocks,heights,biomes,meshes}
+  requested: new Set(),
+  edits: new Map(),      // key -> Map(blockIndex -> id), survives unloads
+  loadQueue: [],         // [cx, cz, dist2] sorted far->near (pop = nearest)
+  meshQueue: new Set(),
+  workers: [],
+  inflight: 0,
+  nextW: 0,
+  loadedAround: 0,       // for the loading progress bar
+
+  key(cx, cz) { return cx + ',' + cz; },
+
+  init() {
+    const n = Math.min(4, Math.max(2, (navigator.hardwareConcurrency || 4) - 1));
+    for (let i = 0; i < n; i++) {
+      const w = new Worker(workerURL);
+      w.onmessage = e => this.onData(e.data);
+      w.onerror = err => console.error('worker error', err.message);
+      this.workers.push(w);
+    }
+  },
+
+  /** Rebuild the load queue around the player and drop far chunks. */
+  ensure(pcx, pcz) {
+    const R = CFG.renderDist;
+    this.loadQueue.length = 0;
+    for (let dx = -R; dx <= R; dx++) for (let dz = -R; dz <= R; dz++) {
+      const d2 = dx * dx + dz * dz;
+      if (d2 > (R + 0.5) * (R + 0.5)) continue;
+      const cx = pcx + dx, cz = pcz + dz, k = this.key(cx, cz);
+      if (!this.requested.has(k)) this.loadQueue.push([cx, cz, d2]);
+    }
+    this.loadQueue.sort((a, b) => b[2] - a[2]);
+    // unload
+    for (const [k, ch] of this.store) {
+      if (Math.max(Math.abs(ch.cx - pcx), Math.abs(ch.cz - pcz)) > R + 2) {
+        for (const m of ch.meshes) { scene.remove(m); m.geometry.dispose(); }
+        this.store.delete(k);
+        this.requested.delete(k);
+        this.meshQueue.delete(ch);
+      }
+    }
+  },
+
+  /** Dispatch queued generation jobs to idle workers. */
+  pump() {
+    while (this.inflight < this.workers.length * 2 && this.loadQueue.length) {
+      const [cx, cz] = this.loadQueue.pop();
+      const k = this.key(cx, cz);
+      if (this.requested.has(k)) continue;
+      this.requested.add(k);
+      this.inflight++;
+      this.workers[this.nextW++ % this.workers.length].postMessage({ cx, cz });
+    }
+  },
+
+  onData(d) {
+    this.inflight--;
+    const k = this.key(d.cx, d.cz);
+    const ch = { cx: d.cx, cz: d.cz, blocks: d.blocks, heights: d.heights, biomes: d.biomes, meshes: [] };
+    const ed = this.edits.get(k);
+    if (ed) for (const [i, id] of ed) ch.blocks[i] = id;
+    this.store.set(k, ch);
+    this.queueMeshWithNeighbors(d.cx, d.cz);
+  },
+
+  queueMeshWithNeighbors(cx, cz) {
+    for (const [dx, dz] of [[0,0],[1,0],[-1,0],[0,1],[0,-1]]) {
+      const ch = this.store.get(this.key(cx + dx, cz + dz));
+      if (ch) this.meshQueue.add(ch);
+    }
+  },
+
+  neighbors(ch) {
+    const xp = this.store.get(this.key(ch.cx + 1, ch.cz));
+    const xn = this.store.get(this.key(ch.cx - 1, ch.cz));
+    const zp = this.store.get(this.key(ch.cx, ch.cz + 1));
+    const zn = this.store.get(this.key(ch.cx, ch.cz - 1));
+    return (xp && xn && zp && zn) ? { xp, xn, zp, zn } : null;
+  },
+
+  /** Mesh queued chunks nearest-first within a per-frame time budget. */
+  processMeshes(pcx, pcz, budgetMs) {
+    if (this.meshQueue.size === 0) return;
+    const t0 = performance.now();
+    const list = [...this.meshQueue].sort((a, b) =>
+      ((a.cx-pcx)**2 + (a.cz-pcz)**2) - ((b.cx-pcx)**2 + (b.cz-pcz)**2));
+    for (const ch of list) {
+      if (!this.neighbors(ch)) continue;
+      this.buildMesh(ch);
+      this.meshQueue.delete(ch);
+      if (performance.now() - t0 > budgetMs) break;
+    }
+  },
+
+  buildMesh(ch) {
+    const nb = this.neighbors(ch);
+    if (!nb) return;
+    const bl = ch.blocks, { xp, xn, zp, zn } = nb;
+    const getB = (lx, ly, lz) => {
+      if (ly < 0 || ly > 255) return 0;
+      if (lx < 0)  return xn.blocks[((240 | lz) << 8) + ly];        // (15<<4)|lz
+      if (lx > 15) return xp.blocks[((lz) << 8) + ly];              // (0<<4)|lz
+      if (lz < 0)  return zn.blocks[(((lx << 4) | 15) << 8) + ly];
+      if (lz > 15) return zp.blocks[((lx << 4) << 8) + ly];
+      return bl[(((lx << 4) | lz) << 8) + ly];
+    };
+    const m = meshChunk(getB, ch.heights);
+    for (const old of ch.meshes) { scene.remove(old); old.geometry.dispose(); }
+    ch.meshes.length = 0;
+    this.addMesh(ch, m.op, matOpaque, 0);
+    this.addMesh(ch, m.wa, matWater, 1);
+    this.addMesh(ch, m.fo, matFoliage, 0);
+  },
+
+  addMesh(ch, dat, mat, renderOrder) {
+    if (dat.i.length === 0) return;
+    const g = new THREE.BufferGeometry();
+    g.setAttribute('position', new THREE.Float32BufferAttribute(dat.p, 3));
+    g.setAttribute('auvl', new THREE.Float32BufferAttribute(dat.u, 4));
+    g.setIndex(dat.p.length / 3 > 65535
+      ? new THREE.Uint32BufferAttribute(dat.i, 1)
+      : new THREE.Uint16BufferAttribute(dat.i, 1));
+    g.computeBoundingSphere();
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.position.set(ch.cx * 16, 0, ch.cz * 16);
+    mesh.renderOrder = renderOrder;
+    mesh.matrixAutoUpdate = false;
+    mesh.updateMatrix();
+    scene.add(mesh);
+    ch.meshes.push(mesh);
+  },
+
+  /* -------------------- world block access ---------------------- */
+  chunkAt(wx, wz) { return this.store.get(this.key(wx >> 4, wz >> 4)); },
+
+  getBlock(wx, y, wz) {
+    if (y < 0 || y > 255) return 0;
+    const ch = this.chunkAt(wx, wz);
+    if (!ch) return 0;
+    return ch.blocks[((((wx & 15) << 4) | (wz & 15)) << 8) + y];
+  },
+
+  setBlock(wx, y, wz, id) {
+    if (y < 1 || y > 255) return false;
+    const ch = this.chunkAt(wx, wz);
+    if (!ch) return false;
+    const lx = wx & 15, lz = wz & 15;
+    const idx = (((lx << 4) | lz) << 8) + y;
+    ch.blocks[idx] = id;
+    const k = this.key(ch.cx, ch.cz);
+    let ed = this.edits.get(k);
+    if (!ed) { ed = new Map(); this.edits.set(k, ed); }
+    ed.set(idx, id);
+    // immediate remesh (this chunk + touching neighbours)
+    this.buildMesh(ch);
+    if (lx === 0)  { const n = this.store.get(this.key(ch.cx - 1, ch.cz)); if (n) this.buildMesh(n); }
+    if (lx === 15) { const n = this.store.get(this.key(ch.cx + 1, ch.cz)); if (n) this.buildMesh(n); }
+    if (lz === 0)  { const n = this.store.get(this.key(ch.cx, ch.cz - 1)); if (n) this.buildMesh(n); }
+    if (lz === 15) { const n = this.store.get(this.key(ch.cx, ch.cz + 1)); if (n) this.buildMesh(n); }
+    return true;
+  },
+
+  biomeAt(wx, wz) {
+    const ch = this.chunkAt(wx, wz);
+    return ch ? ch.biomes[((wx & 15) << 4) | (wz & 15)] : 255;
+  },
+
+  /** Top solid block y at (wx, wz), or -1 when the chunk isn't loaded. */
+  surfaceY(wx, wz) {
+    const ch = this.chunkAt(wx, wz);
+    if (!ch) return -1;
+    const base = (((wx & 15) << 4) | (wz & 15)) << 8;
+    for (let y = 130; y > 0; y--) if (SOLID[ch.blocks[base + y]]) return y;
+    return -1;
+  },
+};
+ChunkManager.init();
+
+/* ================================================================== */
+/*  PLAY — first-person controller, physics, block interaction        */
+/* ================================================================== */
+
+const player = {
+  pos: new THREE.Vector3(0.5, 80, 0.5),   // corrected to the surface on spawn
+  vel: new THREE.Vector3(),
+  yaw: Math.PI * 0.25, pitch: -0.08,
+  onGround: false, inWater: false, crouch: false, sprint: false,
+  W: 0.3,
+  height() { return this.crouch ? 1.5 : 1.8; },
+  eye() { return this.crouch ? 1.32 : 1.62; },
+};
+const keys = {};
+let locked = false;
+let spawned = false;
+
+window.addEventListener('keydown', e => {
+  keys[e.code] = true;
+  if (e.code.startsWith('Digit')) {
+    const n = +e.code.slice(5);
+    if (n >= 1 && n <= 9) setHotbarSel(n - 1);
+  }
+  if (e.code === 'BracketLeft')  setRenderDist(CFG.renderDist - 1);
+  if (e.code === 'BracketRight') setRenderDist(CFG.renderDist + 1);
+  if (e.code === 'Space') e.preventDefault();
+});
+window.addEventListener('keyup', e => { keys[e.code] = false; });
+window.addEventListener('blur', () => { for (const k in keys) keys[k] = false; });
+
+document.addEventListener('mousemove', e => {
+  if (!locked) return;
+  player.yaw -= e.movementX * 0.0023;
+  player.pitch = clampf(player.pitch - e.movementY * 0.0023, -1.55, 1.55);
+});
+
+function updatePlayer(dt) {
+  const p = player.pos;
+  if (!ChunkManager.chunkAt(Math.floor(p.x), Math.floor(p.z))) return; // wait for terrain
+
+  // water state (feet and eye)
+  const feetIn = ChunkManager.getBlock(Math.floor(p.x), Math.floor(p.y + 0.35), Math.floor(p.z)) === B.WATER;
+  const eyeIn  = ChunkManager.getBlock(Math.floor(p.x), Math.floor(p.y + player.eye()), Math.floor(p.z)) === B.WATER;
+  player.inWater = feetIn || eyeIn;
+
+  // input
+  let f = 0, s = 0;
+  if (locked) {
+    f = (keys.KeyW ? 1 : 0) - (keys.KeyS ? 1 : 0);
+    s = (keys.KeyD ? 1 : 0) - (keys.KeyA ? 1 : 0);
+  }
+  player.crouch = !!(keys.ControlLeft || keys.ControlRight) && !player.inWater;
+  player.sprint = !!(keys.ShiftLeft || keys.ShiftRight) && f > 0 && !player.crouch;
+  const speed = player.inWater ? 2.6 : player.crouch ? 1.7 : player.sprint ? 7.0 : 4.4;
+
+  const sy = Math.sin(player.yaw), cy = Math.cos(player.yaw);
+  let tx = (-sy * f + cy * s), tz = (-cy * f - sy * s);
+  const len = Math.hypot(tx, tz);
+  if (len > 0) { tx = tx / len * speed; tz = tz / len * speed; }
+
+  const acc = player.onGround ? 12 : player.inWater ? 6 : 3.2;
+  const k = Math.min(1, acc * dt);
+  player.vel.x += (tx - player.vel.x) * k;
+  player.vel.z += (tz - player.vel.z) * k;
+
+  // vertical
+  if (player.inWater) {
+    const target = (locked && keys.Space) ? 3.4 : -2.1;
+    player.vel.y += (target - player.vel.y) * Math.min(1, 5 * dt);
+  } else {
+    player.vel.y += CFG.gravity * dt;
+    if (player.vel.y < -50) player.vel.y = -50;
+    if (locked && keys.Space && player.onGround) { player.vel.y = 8.3; player.onGround = false; }
+  }
+
+  // integrate, axis by axis
+  moveAxis(0, player.vel.x * dt);
+  moveAxis(2, player.vel.z * dt);
+  player.onGround = false;
+  moveAxis(1, player.vel.y * dt);
+
+  if (p.y < -10) { p.set(0.5, 90, 0.5); player.vel.set(0, 0, 0); } // safety net
+}
+
+function moveAxis(axis, delta) {
+  if (delta === 0) return;
+  const p = player.pos, w = player.W, H = player.height();
+  p.setComponent(axis, p.getComponent(axis) + delta);
+  const minX = Math.floor(p.x - w), maxX = Math.floor(p.x + w);
+  const minY = Math.floor(p.y),     maxY = Math.floor(p.y + H);
+  const minZ = Math.floor(p.z - w), maxZ = Math.floor(p.z + w);
+  for (let bx = minX; bx <= maxX; bx++)
+    for (let by = minY; by <= maxY; by++)
+      for (let bz = minZ; bz <= maxZ; bz++) {
+        if (!SOLID[ChunkManager.getBlock(bx, by, bz)]) continue;
+        if (axis === 0) { p.x = delta > 0 ? bx - w - 0.001 : bx + 1 + w + 0.001; player.vel.x = 0; }
+        else if (axis === 2) { p.z = delta > 0 ? bz - w - 0.001 : bz + 1 + w + 0.001; player.vel.z = 0; }
+        else {
+          if (delta > 0) { p.y = by - H - 0.001; player.vel.y = 0; }
+          else { p.y = by + 1; player.vel.y = 0; player.onGround = true; }
+        }
+        return;
+      }
+}
+
+/* --------------------- voxel raycast (DDA) ----------------------- */
+const _rayDir = new THREE.Vector3();
+function raycast(maxD) {
+  camera.getWorldDirection(_rayDir);
+  const ox = camera.position.x, oy = camera.position.y, oz = camera.position.z;
+  let x = Math.floor(ox), y = Math.floor(oy), z = Math.floor(oz);
+  const stepX = _rayDir.x > 0 ? 1 : -1, stepY = _rayDir.y > 0 ? 1 : -1, stepZ = _rayDir.z > 0 ? 1 : -1;
+  const tdX = Math.abs(1 / _rayDir.x), tdY = Math.abs(1 / _rayDir.y), tdZ = Math.abs(1 / _rayDir.z);
+  let tmX = (_rayDir.x > 0 ? x + 1 - ox : ox - x) * tdX;
+  let tmY = (_rayDir.y > 0 ? y + 1 - oy : oy - y) * tdY;
+  let tmZ = (_rayDir.z > 0 ? z + 1 - oz : oz - z) * tdZ;
+  let nx = 0, ny = 0, nz = 0, t = 0;
+  for (let i = 0; i < 96 && t <= maxD; i++) {
+    const id = ChunkManager.getBlock(x, y, z);
+    if (id !== B.AIR && id !== B.WATER) return { x, y, z, nx, ny, nz, id };
+    if (tmX < tmY && tmX < tmZ)      { x += stepX; t = tmX; tmX += tdX; nx = -stepX; ny = 0; nz = 0; }
+    else if (tmY < tmZ)              { y += stepY; t = tmY; tmY += tdY; nx = 0; ny = -stepY; nz = 0; }
+    else                             { z += stepZ; t = tmZ; tmZ += tdZ; nx = 0; ny = 0; nz = -stepZ; }
+  }
+  return null;
+}
+
+/* -------------------- break / place blocks ----------------------- */
+const HOTBAR = [B.GRASS, B.DIRT, B.STONE, B.COBBLE, B.PLANKS, B.LOG, B.LEAVES, B.SAND, B.SNOW];
+let hotbarSel = 0;
+
+window.addEventListener('contextmenu', e => e.preventDefault());
+window.addEventListener('mousedown', e => {
+  if (!locked) return;
+  const hit = raycast(6);
+  if (!hit) return;
+  if (e.button === 0) {                                    // break
+    if (hit.id === B.BEDROCK) return;
+    ChunkManager.setBlock(hit.x, hit.y, hit.z, B.AIR);
+    if (CROSS[ChunkManager.getBlock(hit.x, hit.y + 1, hit.z)])
+      ChunkManager.setBlock(hit.x, hit.y + 1, hit.z, B.AIR);
+  } else if (e.button === 2) {                             // place
+    const px = hit.x + hit.nx, py = hit.y + hit.ny, pz = hit.z + hit.nz;
+    const cur = ChunkManager.getBlock(px, py, pz);
+    if (cur !== B.AIR && cur !== B.WATER && !CROSS[cur]) return;
+    const id = HOTBAR[hotbarSel];
+    if (SOLID[id]) {                                       // don't place inside yourself
+      const p = player.pos, w = player.W, H = player.height();
+      if (px + 1 > p.x - w && px < p.x + w &&
+          py + 1 > p.y && py < p.y + H &&
+          pz + 1 > p.z - w && pz < p.z + w) return;
+    }
+    ChunkManager.setBlock(px, py, pz, id);
+  }
+});
+
+/* ------------------- targeted block outline ---------------------- */
+const outline = new THREE.LineSegments(
+  new THREE.EdgesGeometry(new THREE.BoxGeometry(1.004, 1.004, 1.004)),
+  new THREE.LineBasicMaterial({ color: 0x111111, transparent: true, opacity: 0.7 }));
+outline.visible = false;
+scene.add(outline);
+function updateOutline() {
+  const hit = locked ? raycast(6) : null;
+  if (hit) {
+    outline.position.set(hit.x + 0.5, hit.y + 0.5, hit.z + 0.5);
+    outline.visible = true;
+  } else outline.visible = false;
+}
+
+/* ================================================================== */
+/*  LIFE — villager NPCs, lights, day/night cycle                     */
+/* ================================================================== */
+
+const gen = createGenerator(CFG.seed);   // main-thread copy: village layout + NPC spawns
+
+// lights only affect the Lambert-shaded NPCs; terrain uses its own shader
+const hemi = new THREE.HemisphereLight(0xbfd8ff, 0x6b5b3e, 0.9);
+const sunLight = new THREE.DirectionalLight(0xfff3d6, 0.9);
+scene.add(hemi, sunLight);
+scene.fog = new THREE.Fog(U.fogColor.value, U.fogNear.value, U.fogFar.value);
+scene.fog.color = U.fogColor.value;      // share the instance with the chunk shader
+
+const sunMesh = new THREE.Mesh(new THREE.CircleGeometry(22, 20),
+  new THREE.MeshBasicMaterial({ color: 0xfff1a8, fog: false }));
+const moonMesh = new THREE.Mesh(new THREE.CircleGeometry(13, 20),
+  new THREE.MeshBasicMaterial({ color: 0xdde4f5, fog: false }));
+scene.add(sunMesh, moonMesh);
+
+const villagers = [];
+const ROBE_COLORS = [0x8a6642, 0x7a5b3a, 0x996e4d, 0x6e5233, 0x8f7350];
+function makeVillager(tint) {
+  const g = new THREE.Group();
+  const m = c => new THREE.MeshLambertMaterial({ color: c });
+  const robe = new THREE.Mesh(new THREE.BoxGeometry(0.55, 1.15, 0.36), m(tint));
+  robe.position.y = 0.575;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.42, 0.42, 0.42), m(0xc8a06c));
+  head.position.y = 1.41;
+  const nose = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.24, 0.1), m(0xb08a56));
+  nose.position.set(0, 1.36, 0.24);
+  const arms = new THREE.Mesh(new THREE.BoxGeometry(0.62, 0.16, 0.2),
+    m(new THREE.Color(tint).multiplyScalar(0.8).getHex()));
+  arms.position.set(0, 0.95, 0.16);
+  g.add(robe, head, nose, arms);
+  return g;
+}
+
+let npcsSpawned = false;
+function trySpawnVillagers() {
+  if (npcsSpawned) return;
+  // wait until the village centre chunk exists
+  if (!ChunkManager.chunkAt(gen.vx, gen.vz)) return;
+  let ok = true;
+  for (const [nx, nz] of gen.npc) if (ChunkManager.surfaceY(nx, nz) < 0) { ok = false; break; }
+  if (!ok) return;
+  for (let i = 0; i < gen.npc.length; i++) {
+    const [nx, nz] = gen.npc[i];
+    const y = ChunkManager.surfaceY(nx, nz);
+    const mesh = makeVillager(ROBE_COLORS[i % ROBE_COLORS.length]);
+    mesh.position.set(nx + 0.5, y + 1, nz + 0.5);
+    scene.add(mesh);
+    villagers.push({ mesh, state: 'idle', timer: 1 + Math.random() * 3, tx: nx, tz: nz });
+  }
+  npcsSpawned = true;
+}
+
+function updateVillagers(dt) {
+  const simD = CFG.simDist * 16;
+  for (const v of villagers) {
+    const m = v.mesh;
+    const dxp = m.position.x - player.pos.x, dzp = m.position.z - player.pos.z;
+    if (dxp * dxp + dzp * dzp > simD * simD) continue;
+    v.timer -= dt;
+    if (v.state === 'walk') {
+      const dx = v.tx + 0.5 - m.position.x, dz = v.tz + 0.5 - m.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.4 || v.timer < 0) { v.state = 'idle'; v.timer = 1.5 + Math.random() * 4; }
+      else {
+        m.position.x += dx / d * 1.1 * dt;
+        m.position.z += dz / d * 1.1 * dt;
+        const targetRot = Math.atan2(dx, dz);
+        let dr = targetRot - m.rotation.y;
+        while (dr > Math.PI) dr -= Math.PI * 2;
+        while (dr < -Math.PI) dr += Math.PI * 2;
+        m.rotation.y += dr * Math.min(1, dt * 8);
+      }
+    } else if (v.timer < 0) {
+      const a = Math.random() * Math.PI * 2, r = 4 + Math.random() * 22;
+      v.tx = Math.round(gen.vx + Math.cos(a) * r);
+      v.tz = Math.round(gen.vz + Math.sin(a) * r);
+      v.state = 'walk';
+      v.timer = 14;
+    }
+    // follow the ground smoothly
+    const sy = ChunkManager.surfaceY(Math.floor(m.position.x), Math.floor(m.position.z));
+    if (sy > 0) m.position.y += (sy + 1 - m.position.y) * Math.min(1, dt * 10);
+  }
+}
+
+/* ------------------------- day / night --------------------------- */
+let dayTime = 0.28;                       // start mid-morning
+const DAY_LEN = 600;                      // seconds per full cycle
+const skyDay = new THREE.Color(0x87ceeb), skyNight = new THREE.Color(0x0b1026);
+const _sunDir = new THREE.Vector3();
+
+function updateDayNight(dt) {
+  dayTime = (dayTime + dt / DAY_LEN) % 1;
+  const ang = dayTime * Math.PI * 2;
+  const sunH = Math.sin(ang);
+  const dl = clampf(0.2 + sunH * 1.1, 0.2, 1.0);
+  U.daylight.value = dl;
+
+  const kSky = clampf(sunH * 2.2 + 0.25, 0, 1);
+  U.fogColor.value.copy(skyNight).lerp(skyDay, kSky);
+  renderer.setClearColor(U.fogColor.value);
+
+  _sunDir.set(Math.cos(ang), sunH, 0.35).normalize();
+  sunLight.position.copy(_sunDir).multiplyScalar(120);
+  sunLight.intensity = Math.max(0, sunH) * 0.9 + 0.1;
+  hemi.intensity = 0.3 + 0.6 * dl;
+
+  sunMesh.position.copy(camera.position).addScaledVector(_sunDir, 380);
+  sunMesh.lookAt(camera.position);
+  moonMesh.position.copy(camera.position).addScaledVector(_sunDir, -380);
+  moonMesh.lookAt(camera.position);
+}
+
+/* ================================================================== */
+/*  UI — HUD, hotbar, pointer lock, main loop, boot                   */
+/* ================================================================== */
+
+const elOverlay = document.getElementById('overlay');
+const elHud = document.getElementById('hud');
+const elInfo = document.getElementById('info');
+const elSelName = document.getElementById('selname');
+const elHotbar = document.getElementById('hotbar');
+const elPlay = document.getElementById('playBtn');
+const elLoad = document.getElementById('loadMsg');
+const elWaterFx = document.getElementById('waterfx');
+
+const BIOME_NAMES = ['Plains', 'Forest', 'Desert', 'Snowy Tundra', 'Ocean', 'Beach'];
+
+// hotbar icons straight from the atlas pixels
+(function buildHotbar() {
+  for (let i = 0; i < HOTBAR.length; i++) {
+    const slot = document.createElement('div');
+    slot.className = 'slot' + (i === 0 ? ' sel' : '');
+    const key = document.createElement('span');
+    key.className = 'key'; key.textContent = i + 1;
+    const cv = document.createElement('canvas');
+    cv.width = cv.height = 16;
+    const ctx = cv.getContext('2d');
+    const img = ctx.createImageData(16, 16);
+    const layer = FACELAYER[HOTBAR[i] * 6];               // side face
+    for (let r = 0; r < 16; r++)                          // canvas row 0 = top, atlas row 0 = bottom
+      img.data.set(atlasData.subarray((layer * 16 + 15 - r) * 64, (layer * 16 + 16 - r) * 64), r * 64);
+    ctx.putImageData(img, 0, 0);
+    slot.append(key, cv);
+    slot.addEventListener('click', () => setHotbarSel(i));
+    elHotbar.appendChild(slot);
+  }
+})();
+
+function setHotbarSel(i) {
+  hotbarSel = ((i % HOTBAR.length) + HOTBAR.length) % HOTBAR.length;
+  [...elHotbar.children].forEach((s, j) => s.classList.toggle('sel', j === hotbarSel));
+  elSelName.textContent = BLOCK_NAMES[HOTBAR[hotbarSel]];
+}
+window.addEventListener('wheel', e => {
+  if (locked) setHotbarSel(hotbarSel + (e.deltaY > 0 ? 1 : -1));
+}, { passive: true });
+setHotbarSel(0);
+
+function setRenderDist(r) {
+  CFG.renderDist = clampf(r, 4, 12);
+  const far = CFG.renderDist * 16;
+  U.fogFar.value = far - 8;
+  U.fogNear.value = (far - 8) * 0.55;
+  camera.far = far + 60;
+  camera.updateProjectionMatrix();
+  scene.fog.near = U.fogNear.value;
+  scene.fog.far = U.fogFar.value;
+  ChunkManager.ensure(Math.floor(player.pos.x) >> 4, Math.floor(player.pos.z) >> 4);
+}
+setRenderDist(CFG.renderDist);
+
+/* ---------------------- pointer lock flow ------------------------ */
+elPlay.addEventListener('click', () => {
+  if (!spawned) {
+    const sy = ChunkManager.surfaceY(0, 0);
+    player.pos.set(0.5, (sy > 0 ? sy + 1 : 64) + 0.01, 0.5);
+    player.vel.set(0, 0, 0);
+    // face the village
+    player.yaw = Math.atan2(-(gen.vx - 0.5), -(gen.vz - 0.5));
+    spawned = true;
+  }
+  renderer.domElement.requestPointerLock();
+});
+document.addEventListener('pointerlockchange', () => {
+  locked = document.pointerLockElement === renderer.domElement;
+  elOverlay.style.display = locked ? 'none' : 'flex';
+  elHud.style.display = locked ? 'block' : 'none';
+  if (!locked && spawned) {
+    elPlay.textContent = 'Resume';
+    elLoad.textContent = 'Paused — click Resume to keep playing';
+  }
+});
+
+/* --------------------------- main loop --------------------------- */
+let last = performance.now();
+let lastEnsure = 0, lastHud = 0;
+let fpsFrames = 0, fpsTime = 0, fps = 0;
+let lastPcx = 1e9, lastPcz = 1e9;
+
+function frame(now) {
+  requestAnimationFrame(frame);
+  const dt = Math.min(0.05, (now - last) / 1000);
+  last = now;
+  U.time.value = now / 1000;
+
+  const pcx = Math.floor(player.pos.x) >> 4, pcz = Math.floor(player.pos.z) >> 4;
+  if (pcx !== lastPcx || pcz !== lastPcz || now - lastEnsure > 1500) {
+    ChunkManager.ensure(pcx, pcz);
+    lastPcx = pcx; lastPcz = pcz; lastEnsure = now;
+  }
+  ChunkManager.pump();
+  ChunkManager.processMeshes(pcx, pcz, spawned ? 6 : 14);
+
+  if (spawned) updatePlayer(dt);
+  updateDayNight(dt);
+  trySpawnVillagers();
+  updateVillagers(dt);
+  updateOutline();
+
+  // camera follows player
+  camera.position.set(player.pos.x, player.pos.y + player.eye(), player.pos.z);
+  camera.rotation.set(player.pitch, player.yaw, 0, 'YXZ');
+  const targetFov = player.sprint ? 82 : 75;
+  if (Math.abs(camera.fov - targetFov) > 0.2) {
+    camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 8);
+    camera.updateProjectionMatrix();
+  }
+
+  // underwater tint + fog
+  const eyeWater = ChunkManager.getBlock(Math.floor(camera.position.x),
+    Math.floor(camera.position.y), Math.floor(camera.position.z)) === B.WATER;
+  elWaterFx.style.display = eyeWater ? 'block' : 'none';
+  if (eyeWater) { U.fogNear.value = 2; U.fogFar.value = 26; }
+  else {
+    const far = CFG.renderDist * 16 - 8;
+    U.fogFar.value = far; U.fogNear.value = far * 0.55;
+  }
+
+  // fps + HUD
+  fpsFrames++; fpsTime += dt;
+  if (fpsTime >= 0.5) { fps = Math.round(fpsFrames / fpsTime); fpsFrames = 0; fpsTime = 0; }
+  if (now - lastHud > 150) { lastHud = now; updateHud(); }
+
+  renderer.render(scene, camera);
+}
+
+function updateHud() {
+  if (!locked) {
+    if (!spawned) {
+      // loading progress toward spawn readiness
+      const R = CFG.renderDist;
+      const total = Math.round(Math.PI * R * R);
+      let n = 0;
+      for (const ch of ChunkManager.store.values()) if (ch.meshes.length) n++;
+      const ready = ChunkManager.surfaceY(0, 0) > 0 &&
+        (ChunkManager.store.get('0,0') || { meshes: [] }).meshes.length > 0;
+      if (ready) { elPlay.disabled = false; elPlay.textContent = 'Play'; elLoad.textContent = 'World ready!'; }
+      else elLoad.textContent = 'Generating world… ' + Math.min(99, Math.round(n / total * 100)) + '%';
+    }
+    return;
+  }
+  const p = player.pos;
+  const bio = ChunkManager.biomeAt(Math.floor(p.x), Math.floor(p.z));
+  const hit = raycast(6);
+  elInfo.innerHTML =
+    'FPS <b>' + fps + '</b>   View ' + CFG.renderDist + ' chunks\n' +
+    'XYZ  ' + p.x.toFixed(1) + ' / ' + p.y.toFixed(1) + ' / ' + p.z.toFixed(1) + '\n' +
+    'Chunk ' + (Math.floor(p.x) >> 4) + ', ' + (Math.floor(p.z) >> 4) +
+    '   <span class="dim">Biome</span> ' + (BIOME_NAMES[bio] || '—') + '\n' +
+    '<span class="dim">Looking at</span> ' + (hit ? BLOCK_NAMES[hit.id] : '—') +
+    '   <span class="dim">Holding</span> ' + BLOCK_NAMES[HOTBAR[hotbarSel]];
+}
+
+/* ----------------------------- boot ------------------------------ */
+ChunkManager.ensure(0, 0);
+requestAnimationFrame(frame);
+
+</script>
+</body>
+</html>
