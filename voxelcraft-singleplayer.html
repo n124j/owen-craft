@@ -1341,6 +1341,103 @@ function updateVillagers(dt) {
   }
 }
 
+/* ------------------------- animals --------------------------------- */
+// Wandering cows/pigs/sheep — one deterministic spawn roll per plains/forest
+// chunk as it loads (the world is infinite, so unlike the village these
+// can't be precomputed up front). Purely decorative, capped, no interaction.
+const animals = [];
+const spawnedAnimalChunks = new Set();
+const ANIMAL_MAX = 26;
+const ANIMAL_SPECIES = ['Cow', 'Pig', 'Sheep'];
+
+function makeAnimal(species) {
+  const g = new THREE.Group();
+  const m = c => new THREE.MeshLambertMaterial({ color: c });
+  const isPig = species === 'Pig', isSheep = species === 'Sheep';
+  const bodyColor = isPig ? 0xefb2bc : isSheep ? 0xf5f2e8 : 0xd9d2c2;
+  const headColor = isPig ? 0xefb2bc : isSheep ? 0xdcc9a6 : 0x3b2a1c;
+  const legColor  = isSheep ? 0x3b2a1c : headColor;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.56, isSheep ? 0.62 : 0.5), m(bodyColor));
+  body.position.y = 0.58;
+  const head = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.32, 0.34), m(headColor));
+  head.position.set(0, 0.62, 0.56);
+  g.add(body, head);
+  const legGeo = new THREE.BoxGeometry(0.15, 0.32, 0.15), legMat = m(legColor);
+  for (const [lx, lz] of [[-0.32, -0.16], [0.32, -0.16], [-0.32, 0.16], [0.32, 0.16]]) {
+    const leg = new THREE.Mesh(legGeo, legMat);
+    leg.position.set(lx, 0.16, lz);
+    g.add(leg);
+  }
+  return g;
+}
+
+let _animalSpawnT = 0;
+/** Roll a spawn attempt (once each) for newly-loaded plains/forest chunks. */
+function trySpawnAnimals(dt) {
+  _animalSpawnT += dt;
+  if (_animalSpawnT < 0.4 || animals.length >= ANIMAL_MAX) return;
+  _animalSpawnT = 0;
+  for (const [k, ch] of ChunkManager.store) {
+    if (spawnedAnimalChunks.has(k)) continue;
+    spawnedAnimalChunks.add(k);
+    const biome = ch.biomes[136];   // chunk-centre biome, (8<<4)|8
+    if ((biome !== 0 && biome !== 1) || hash01(ch.cx, ch.cz, 0xa715) > 0.22) continue;
+    const lx = 3 + Math.floor(hash01(ch.cx, ch.cz, 0x51f) * 10);
+    const lz = 3 + Math.floor(hash01(ch.cx, ch.cz, 0x9c3) * 10);
+    const wx = ch.cx * 16 + lx, wz = ch.cz * 16 + lz;
+    const sy = ChunkManager.surfaceY(wx, wz);
+    if (sy < CFG.seaLevel || ChunkManager.getBlock(wx, sy, wz) !== B.GRASS ||
+        ChunkManager.getBlock(wx, sy + 1, wz) !== B.AIR) continue;
+    const species = ANIMAL_SPECIES[Math.floor(hash01(ch.cx, ch.cz, 0x37b) * 3)];
+    const mesh = makeAnimal(species);
+    mesh.position.set(wx + 0.5, sy + 1, wz + 0.5);
+    mesh.rotation.y = hash01(ch.cx, ch.cz, 0x881) * Math.PI * 2;
+    scene.add(mesh);
+    animals.push({ mesh, state: 'idle', timer: 1 + hash01(ch.cx, ch.cz, 0x21) * 3,
+      homeX: wx, homeZ: wz, tx: wx, tz: wz });
+    if (animals.length >= ANIMAL_MAX) break;
+  }
+}
+
+function updateAnimals(dt) {
+  const simD = CFG.simDist * 16;
+  for (let i = animals.length - 1; i >= 0; i--) {
+    const a = animals[i], m = a.mesh;
+    const dxp = m.position.x - player.pos.x, dzp = m.position.z - player.pos.z;
+    const d2 = dxp * dxp + dzp * dzp;
+    if (d2 > (simD + 32) * (simD + 32)) {          // wandered/loaded out of range — despawn
+      scene.remove(m);
+      animals.splice(i, 1);
+      spawnedAnimalChunks.delete(ChunkManager.key(a.homeX >> 4, a.homeZ >> 4));
+      continue;
+    }
+    if (d2 > simD * simD) continue;
+    a.timer -= dt;
+    if (a.state === 'walk') {
+      const dx = a.tx + 0.5 - m.position.x, dz = a.tz + 0.5 - m.position.z;
+      const d = Math.hypot(dx, dz);
+      if (d < 0.3 || a.timer < 0) { a.state = 'idle'; a.timer = 2 + Math.random() * 4; }
+      else {
+        m.position.x += dx / d * 0.9 * dt;
+        m.position.z += dz / d * 0.9 * dt;
+        const targetRot = Math.atan2(dx, dz);
+        let dr = targetRot - m.rotation.y;
+        while (dr > Math.PI) dr -= Math.PI * 2;
+        while (dr < -Math.PI) dr += Math.PI * 2;
+        m.rotation.y += dr * Math.min(1, dt * 8);
+      }
+    } else if (a.timer < 0) {
+      const ang = Math.random() * Math.PI * 2, r = 2 + Math.random() * 5;
+      a.tx = Math.round(a.homeX + Math.cos(ang) * r);
+      a.tz = Math.round(a.homeZ + Math.sin(ang) * r);
+      a.state = 'walk';
+      a.timer = 8;
+    }
+    const sy = ChunkManager.surfaceY(Math.floor(m.position.x), Math.floor(m.position.z));
+    if (sy > 0) m.position.y += (sy + 1 - m.position.y) * Math.min(1, dt * 10);
+  }
+}
+
 /* ------------------------- day / night --------------------------- */
 let dayTime = 0.28;                       // start mid-morning
 const DAY_LEN = 600;                      // seconds per full cycle
@@ -1474,6 +1571,8 @@ function frame(now) {
   updateDayNight(dt);
   trySpawnVillagers();
   updateVillagers(dt);
+  trySpawnAnimals(dt);
+  updateAnimals(dt);
   updateOutline();
 
   // camera follows player
