@@ -123,6 +123,7 @@
   #chatlog .msg { background:rgba(8,12,20,.55); color:#e8f0fa; padding:2px 8px;
     border-radius:4px; word-wrap:break-word; }
   #chatlog .msg b { color:#ffd76e; }
+  #chatlog .msg .ts { color:#6f8298; font-size:11px; }
   #chatInput { display:none; width:100%; font:13px Consolas, monospace; padding:6px 8px;
     border-radius:4px; border:1px solid #46536b; background:rgba(10,15,24,.85); color:#fff;
     outline:none; pointer-events:auto; }
@@ -171,14 +172,35 @@
   body.touch #goal { top:62px; font-size:12px; max-width:86vw; white-space:normal;
     text-align:center; }
   #inv { position:absolute; left:10px; top:128px; display:none;
-    background:rgba(8,12,20,.72); color:#e8f0fa; font:13px/1.7 Consolas, monospace;
-    padding:10px 14px; border-radius:8px; min-width:210px; }
-  #inv b { color:#ffd76e; }
-  #inv .tool { color:#9fd18f; }
-  #inv .fx { margin-top:6px; color:#7fd4ff; }
-  #inv .dim { color:#8fa4bd; }
+    background:rgba(8,12,20,.78); color:#e8f0fa; font:13px/1.7 Consolas, monospace;
+    padding:10px 12px; border-radius:8px; }
+  #inv b { color:#ffd76e; display:block; margin-bottom:8px; }
+  #inv .fx { margin-top:8px; color:#7fd4ff; max-width:392px; }
+  #inv .dim { color:#8fa4bd; margin-top:6px; }
   body.touch #inv { top:226px; }
   #btnInv { left:10px; top:172px; }
+
+  /* ---------- Minecraft-style inventory slot grid ---------- */
+  #invGrid { display:grid; grid-template-columns:repeat(9, 40px); grid-auto-rows:40px; gap:4px; }
+  .islot { width:40px; height:40px; border-radius:5px; position:relative;
+    display:flex; align-items:center; justify-content:center; font-size:20px;
+    background:rgba(0,0,0,.4);
+    border-top:2px solid rgba(255,255,255,.14); border-left:2px solid rgba(255,255,255,.14);
+    border-bottom:2px solid rgba(0,0,0,.55); border-right:2px solid rgba(0,0,0,.55); }
+  .islot.filled { pointer-events:auto; cursor:default; }
+  .islot.filled:hover { border-color:#ffd76e; box-shadow:0 0 6px rgba(255,215,110,.5); }
+  .islot.tool { box-shadow:inset 0 0 0 1px rgba(159,209,143,.55); }
+  .islot.usable:hover { cursor:pointer; }
+  .islot .cnt { position:absolute; right:2px; bottom:0; font:bold 11px Consolas, monospace;
+    color:#fff; text-shadow:1px 1px 1px #000; }
+  #invTip { position:fixed; background:#101722ee; border:1px solid #46536b; color:#ffd76e;
+    font:12px Consolas, monospace; padding:4px 9px; border-radius:4px; pointer-events:none;
+    white-space:nowrap; z-index:15; display:none; }
+  #invTip .n { color:#cfe0f4; }
+  @media (max-width:700px) {
+    #invGrid { grid-template-columns:repeat(6, 34px); grid-auto-rows:34px; }
+    .islot { width:34px; height:34px; font-size:17px; }
+  }
   #goalMenu { color:#ffd76e; }
 
   /* ---------- crafting, upgrades, health ---------- */
@@ -280,6 +302,7 @@
   <div id="players"></div>
   <div id="goal"></div>
   <div id="inv"></div>
+  <div id="invTip"></div>
   <div id="goals"></div>
   <div id="craft"></div>
   <div id="upshop"></div>
@@ -1709,15 +1732,69 @@ const ANIMAL_SPECIES = ['Cow', 'Pig', 'Sheep'];
 function makeAnimal(species) {
   const g = new THREE.Group();
   const m = c => new THREE.MeshLambertMaterial({ color: c });
-  const isPig = species === 'Pig', isSheep = species === 'Sheep';
+  const isPig = species === 'Pig', isSheep = species === 'Sheep', isCow = species === 'Cow';
   const bodyColor = isPig ? 0xefb2bc : isSheep ? 0xf5f2e8 : 0xd9d2c2;
   const headColor = isPig ? 0xefb2bc : isSheep ? 0xdcc9a6 : 0x3b2a1c;
   const legColor  = isSheep ? 0x3b2a1c : headColor;
-  const body = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.56, isSheep ? 0.62 : 0.5), m(bodyColor));
+  const snoutColor = isPig ? 0xdb7f95 : isSheep ? 0xc9b28c : 0x241b12;
+  const bodyDepth = isSheep ? 0.62 : 0.5;
+  const body = new THREE.Mesh(new THREE.BoxGeometry(0.92, 0.56, bodyDepth), m(bodyColor));
   body.position.y = 0.58;
   const head = new THREE.Mesh(new THREE.BoxGeometry(0.36, 0.32, 0.34), m(headColor));
   head.position.set(0, 0.62, 0.56);
   g.add(body, head);
+
+  // snout — small protruding box, gives the face a readable front
+  const snout = new THREE.Mesh(new THREE.BoxGeometry(isPig ? 0.22 : 0.16, isPig ? 0.14 : 0.1, 0.09), m(snoutColor));
+  snout.position.set(0, 0.58, 0.77);
+  g.add(snout);
+
+  // eyes — tiny dark boxes flush with the face
+  const eyeMat = m(0x171310);
+  const eyeGeo = new THREE.BoxGeometry(0.045, 0.045, 0.02);
+  for (const ex of [-0.1, 0.1]) {
+    const eye = new THREE.Mesh(eyeGeo, eyeMat);
+    eye.position.set(ex, 0.69, 0.735);
+    g.add(eye);
+  }
+
+  // species-specific head details
+  if (isCow) {
+    const hornMat = m(0xe8e0c8);
+    const hornGeo = new THREE.BoxGeometry(0.05, 0.09, 0.05);
+    for (const hx of [-0.13, 0.13]) {
+      const horn = new THREE.Mesh(hornGeo, hornMat);
+      horn.position.set(hx, 0.825, 0.58);
+      g.add(horn);
+    }
+    const spotMat = m(0x4b3520);
+    const spot1 = new THREE.Mesh(new THREE.BoxGeometry(0.32, 0.03, 0.24), spotMat);
+    spot1.position.set(0.16, 0.87, -0.04);
+    spot1.rotation.y = 0.3;
+    const spot2 = new THREE.Mesh(new THREE.BoxGeometry(0.22, 0.03, 0.18), spotMat);
+    spot2.position.set(-0.22, 0.87, 0.08);
+    spot2.rotation.y = -0.2;
+    g.add(spot1, spot2);
+  } else if (isPig) {
+    const earMat = m(headColor);
+    const earGeo = new THREE.BoxGeometry(0.08, 0.1, 0.03);
+    for (const ex of [-0.14, 0.14]) {
+      const ear = new THREE.Mesh(earGeo, earMat);
+      ear.position.set(ex, 0.82, 0.62);
+      ear.rotation.x = -0.3;
+      g.add(ear);
+    }
+  } else if (isSheep) {
+    const wool = new THREE.Mesh(new THREE.BoxGeometry(0.98, 0.26, 0.68), m(0xf7f4ec));
+    wool.position.set(0, 0.82, 0);
+    g.add(wool);
+  }
+
+  // tail
+  const tail = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.08, 0.14), m(isPig ? headColor : legColor));
+  tail.position.set(0, 0.66, -(bodyDepth / 2) - 0.05);
+  g.add(tail);
+
   const legGeo = new THREE.BoxGeometry(0.15, 0.32, 0.15), legMat = m(legColor);
   for (const [lx, lz] of [[-0.32, -0.16], [0.32, -0.16], [-0.32, 0.16], [0.32, 0.16]]) {
     const leg = new THREE.Mesh(legGeo, legMat);
@@ -2065,20 +2142,27 @@ const Net = {
 /* ----------------------------- chat ------------------------------ */
 const Chat = {
   open: false,
+  timeStr(ts) {
+    return new Date(ts || Date.now()).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  },
   add(m) {
     if (!m) return;
     const div = document.createElement('div');
     div.className = 'msg';
+    const t = document.createElement('span');
+    t.className = 'ts'; t.textContent = this.timeStr(m.ts) + ' ';
     const b = document.createElement('b');
     b.textContent = (m.name || '?') + ': ';
-    div.append(b, document.createTextNode(m.text || ''));
+    div.append(t, b, document.createTextNode(m.text || ''));
     this.push(div);
   },
   system(text) {
     const div = document.createElement('div');
     div.className = 'msg';
     div.style.color = '#9fd18f';
-    div.textContent = '★ ' + text;
+    const t = document.createElement('span');
+    t.className = 'ts'; t.textContent = this.timeStr() + ' ';
+    div.append(t, document.createTextNode('★ ' + text));
     this.push(div);
   },
   push(div) {
@@ -2515,6 +2599,7 @@ const Inv = {
   toggle() {
     this.open = !this.open;
     if (this.open) { Goals.panelOpen && Goals.toggle(); this.render(); }
+    else hideInvTip();
     elInv.style.display = this.open ? 'block' : 'none';
   },
 
@@ -2525,24 +2610,40 @@ const Inv = {
     elInv.appendChild(title);
     const entries = Object.entries(this.items).filter(e => e[1] > 0)
       .sort((a, b) => b[1] - a[1]);
+    const MAX = 27;                       // 3 rows of 9, like Minecraft's main inventory
+    const shown = entries.slice(0, MAX);
+    const grid = document.createElement('div');
+    grid.id = 'invGrid';
+    for (const [name, n] of shown) {
+      const d = document.createElement('div');
+      d.className = 'islot filled' + (TOOL_DEFS[name] ? ' tool' : '') + (name === 'Bread' ? ' usable' : '');
+      d.textContent = TOOL_DEFS[name] ? TOOL_DEFS[name].e : (ITEM_EMOJI[name] || '▪');
+      const cnt = document.createElement('span');
+      cnt.className = 'cnt';
+      cnt.textContent = n > 99 ? '99+' : n;
+      d.appendChild(cnt);
+      const label = name + (name === 'Bread' ? ' (click or H to eat)' : '');
+      d.addEventListener('mouseenter', () => showInvTip(d, label, n));
+      d.addEventListener('mouseleave', hideInvTip);
+      if (name === 'Bread') d.addEventListener('click', () => Inv.eatBread());
+      grid.appendChild(d);
+    }
+    const pad = Math.ceil(Math.max(shown.length, 9) / 9) * 9 - shown.length;
+    for (let i = 0; i < pad; i++) {
+      const d = document.createElement('div');
+      d.className = 'islot';
+      grid.appendChild(d);
+    }
+    elInv.appendChild(grid);
     if (!entries.length) {
       const d = document.createElement('div');
       d.className = 'dim';
       d.textContent = 'Empty — break blocks, find tools!';
       elInv.appendChild(d);
-    }
-    for (const [name, n] of entries.slice(0, 14)) {
-      const d = document.createElement('div');
-      if (TOOL_DEFS[name]) d.className = 'tool';
-      if (name === 'Bread') { d.className = 'rrow'; d.addEventListener('click', () => Inv.eatBread()); }
-      d.textContent = (TOOL_DEFS[name] ? TOOL_DEFS[name].e + ' ' : (ITEM_EMOJI[name] || '▪') + ' ')
-        + name + ' ×' + n + (name === 'Bread' ? '  (H to eat)' : '');
-      elInv.appendChild(d);
-    }
-    if (entries.length > 14) {
+    } else if (entries.length > MAX) {
       const d = document.createElement('div');
       d.className = 'dim';
-      d.textContent = '…and ' + (entries.length - 14) + ' more';
+      d.textContent = '…and ' + (entries.length - MAX) + ' more';
       elInv.appendChild(d);
     }
     const fx = [];
@@ -2926,6 +3027,19 @@ const elGoal = document.getElementById('goal');
 const elGoalMenu = document.getElementById('goalMenu');
 const elGoals = document.getElementById('goals');
 const elInv = document.getElementById('inv');
+const elInvTip = document.getElementById('invTip');
+function showInvTip(slotEl, name, n) {
+  elInvTip.textContent = '';
+  elInvTip.append(name + ' ');
+  const s = document.createElement('span');
+  s.className = 'n'; s.textContent = '×' + n;
+  elInvTip.appendChild(s);
+  const r = slotEl.getBoundingClientRect();
+  elInvTip.style.display = 'block';
+  elInvTip.style.left = r.left + 'px';
+  elInvTip.style.top = Math.max(4, r.top - 30) + 'px';
+}
+function hideInvTip() { elInvTip.style.display = 'none'; }
 const elCraft = document.getElementById('craft');
 const elUpshop = document.getElementById('upshop');
 const elHearts = document.getElementById('hearts');
