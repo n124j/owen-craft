@@ -193,6 +193,16 @@
   body.touch #craft, body.touch #upshop { top:226px; left:64px; }
   #btnCraft { left:10px; top:226px; }
   #btnUp    { left:10px; top:280px; }
+  #btnGoals { left:10px; top:334px; }
+
+  /* ---------- full daily-goals checklist panel (toggled with G) ---------- */
+  #goals { position:absolute; left:10px; top:128px; display:none;
+    background:rgba(8,12,20,.78); color:#e8f0fa; font:13px/1.7 Consolas, monospace;
+    padding:10px 14px; border-radius:8px; min-width:250px; max-height:60vh;
+    overflow-y:auto; }
+  #goals b { color:#ffd76e; }
+  #goals .done { color:#8fd15f; }
+  body.touch #goals { top:226px; left:64px; }
   #hearts { position:absolute; left:50%; bottom:78px; transform:translateX(-50%);
     font-size:17px; letter-spacing:2px; text-shadow:1px 1px 2px #000;
     white-space:nowrap; }
@@ -248,7 +258,7 @@
       <div><b>Sprint</b> Shift &nbsp;·&nbsp; <b>Sneak</b> Ctrl</div>
       <div><b>Break block</b> Left click &nbsp;·&nbsp; <b>Place block</b> Right click</div>
       <div><b>Choose block</b> 1–9 or mouse wheel &nbsp;·&nbsp; <b>Chat</b> T &nbsp;·&nbsp; <b>Inventory</b> I</div>
-      <div><b>Craft</b> C &nbsp;·&nbsp; <b>Upgrades</b> K &nbsp;·&nbsp; <b>Eat bread</b> H</div>
+      <div><b>Craft</b> C &nbsp;·&nbsp; <b>Upgrades</b> K &nbsp;·&nbsp; <b>Eat bread</b> H &nbsp;·&nbsp; <b>Goals</b> G</div>
       <div><b>View distance</b> [ and ] &nbsp;·&nbsp; <b>Pause</b> Esc &nbsp;·&nbsp; <b>Sound</b> M &nbsp;·&nbsp; <b>Map</b> N</div>
       <div><b>Controller</b> Sticks move/look &nbsp;·&nbsp; A jump &nbsp;·&nbsp; RT mine &nbsp;·&nbsp; LT place</div>
     </div>
@@ -270,6 +280,7 @@
   <div id="players"></div>
   <div id="goal"></div>
   <div id="inv"></div>
+  <div id="goals"></div>
   <div id="craft"></div>
   <div id="upshop"></div>
   <div id="hearts"></div>
@@ -291,6 +302,7 @@
     <button id="btnInv" class="tbtn small">🎒</button>
     <button id="btnCraft" class="tbtn small">🛠️</button>
     <button id="btnUp" class="tbtn small">⭐</button>
+    <button id="btnGoals" class="tbtn small">🎯</button>
   </div>
 </div>
 
@@ -1370,6 +1382,7 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyI' && locked) Inv.toggle();
   if (e.code === 'KeyC' && locked) Craft.toggle();
   if (e.code === 'KeyK' && locked) Up.toggle();
+  if (e.code === 'KeyG' && locked) Goals.toggle();
   if (e.code === 'KeyH' && locked) Inv.eatBread();
   if (e.code === 'Space') e.preventDefault();
 });
@@ -2486,8 +2499,8 @@ const Inv = {
 
   toggle() {
     this.open = !this.open;
+    if (this.open) { Goals.panelOpen && Goals.toggle(); this.render(); }
     elInv.style.display = this.open ? 'block' : 'none';
-    if (this.open) this.render();
   },
 
   render() {
@@ -2538,9 +2551,11 @@ const Inv = {
     this.xp = v.xp || 0;
     Object.assign(this.up, v.up || {});
     Health.hp = Health.maxHP();
-    if (v.goalDate === Goals.dateKey && Goals.goal) {
-      Goals.progress = Math.min(Goals.goal.n, v.goalProgress || 0);
-      Goals.done = Goals.progress >= Goals.goal.n;
+    if (v.goalDate === Goals.dateKey && Array.isArray(v.goalsProgress) && Goals.goals.length) {
+      Goals.goals.forEach((g, i) => {
+        const p = v.goalsProgress[i];
+        if (typeof p === 'number') { g.progress = Math.min(g.def.n, p); g.done = g.progress >= g.def.n; }
+      });
     }
     if (this.open) this.render();
     Goals.render();
@@ -2554,7 +2569,7 @@ const Inv = {
     this.dirty = false;
     update(ref(Net.db, 'players/' + Net.user.uid + '/inv'),
       { items: this.items, picked: this.picked, xp: this.xp, up: this.up,
-        goalDate: Goals.dateKey, goalProgress: Goals.progress });
+        goalDate: Goals.dateKey, goalsProgress: Goals.goals.map(g => g.progress) });
   },
 };
 
@@ -2571,53 +2586,95 @@ const GOALS = [
   { text: 'Visit the Desert 🐪', type: 'visit', biome: 2, n: 1 },
   { text: 'Visit the Snowy Tundra ☃️', type: 'visit', biome: 3, n: 1 },
   { text: 'Swim in the Ocean 🌊', type: 'visit', biome: 4, n: 1 },
+  { text: 'Dig up {n} Dirt 🟫', item: 'Dirt', n: 10 },
+  { text: 'Mine {n} Cobblestone 🧱', item: 'Cobblestone', n: 10 },
+  { text: 'Dig up {n} Gravel 🪨', item: 'Gravel', n: 8 },
+  { text: 'Chop {n} Pine Logs 🌲', item: 'Pine Log', n: 8 },
+  { text: 'Collect {n} Tall Grass 🌿', item: 'Tall Grass', n: 10 },
+  { text: 'Collect {n} Bread 🍞', item: 'Bread', n: 3 },
+  { text: 'Break {n} Ice blocks 🧊', item: 'Ice', n: 6 },
+  { text: 'Collect {n} Dead Bush 🥀', item: 'Dead Bush', n: 6 },
+  { text: 'Visit the Beach 🏝️', type: 'visit', biome: 5, n: 1 },
+  { text: 'Visit the Forest 🌳', type: 'visit', biome: 1, n: 1 },
+  { text: 'Visit the Plains 🌱', type: 'visit', biome: 0, n: 1 },
+  { text: 'Dig up {n} Sandstone 🟨', item: 'Sandstone', n: 8 },
 ];
+const GOALS_PER_DAY = 10;
 
 const Goals = {
-  goal: null, dateKey: '', progress: 0, done: false,
+  goals: [], dateKey: '', panelOpen: false,
 
-  /** Same goal for every player worldwide: derived from the UTC date. */
+  /** Same {n} goals for every player worldwide: derived from the UTC date. */
   pick() {
     const key = new Date().toISOString().slice(0, 10);
     if (key === this.dateKey) return;
     this.dateKey = key;
     let h = 0;
     for (let i = 0; i < key.length; i++) h = (Math.imul(h, 131) + key.charCodeAt(i)) | 0;
-    this.goal = GOALS[((h ^ CFG.seed) >>> 0) % GOALS.length];
-    this.progress = 0;
-    this.done = false;
+    h = (h ^ CFG.seed) >>> 0;
+    const order = GOALS.map((_, i) => i);            // deterministic Fisher-Yates shuffle
+    for (let i = order.length - 1; i > 0; i--) {
+      const j = Math.floor(hash01(h, i, 0x9e3779b9) * (i + 1));
+      [order[i], order[j]] = [order[j], order[i]];
+    }
+    const count = Math.min(GOALS_PER_DAY, GOALS.length);
+    this.goals = order.slice(0, count).map(i => ({ def: GOALS[i], progress: 0, done: false }));
     this.render();
   },
 
-  text() { return this.goal ? this.goal.text.replace('{n}', this.goal.n) : ''; },
-  onCollect(name) { if (this.goal && this.goal.item === name) this.bump(1); },
-  onTool() { if (this.goal && this.goal.type === 'tool') this.bump(1); },
+  text(def) { return def.text.replace('{n}', def.n); },
+  doneCount() { return this.goals.reduce((n, g) => n + (g.done ? 1 : 0), 0); },
+  onCollect(name) { for (const g of this.goals) if (!g.done && g.def.item === name) this.bump(g, 1); },
+  onTool() { for (const g of this.goals) if (!g.done && g.def.type === 'tool') this.bump(g, 1); },
   onVisit(biome) {
-    if (this.goal && this.goal.type === 'visit' && biome === this.goal.biome) this.bump(this.goal.n);
+    for (const g of this.goals) if (!g.done && g.def.type === 'visit' && biome === g.def.biome) this.bump(g, g.def.n);
   },
 
-  bump(k) {
-    if (this.done || !this.goal) return;
-    this.progress = Math.min(this.goal.n, this.progress + k);
+  bump(g, k) {
+    g.progress = Math.min(g.def.n, g.progress + k);
     Inv.dirty = true;
-    if (this.progress >= this.goal.n) {
-      this.done = true;
+    if (g.progress >= g.def.n) {
+      g.done = true;
       Inv.addXP(100);
       SND.tone(0.2, 0.12, 523, 0, 'square');             // little fanfare
       SND.tone(0.2, 0.12, 659, 0, 'square', 0.12);
       SND.tone(0.22, 0.22, 784, 0, 'square', 0.24);
-      Chat.system('🎉 Goal complete: ' + this.text() + '  (+100 XP)');
-      if (Net.joined) Net.sendChat("🎉 completed today's goal: " + this.text());
+      Chat.system('🎉 Goal complete: ' + this.text(g.def) + '  (+100 XP)');
+      if (Net.joined) Net.sendChat('🎉 completed a daily goal: ' + this.text(g.def));
     }
     this.render();
   },
 
+  toggle() {
+    this.panelOpen = !this.panelOpen;
+    if (this.panelOpen) { Inv.open && Inv.toggle(); Craft.open && Craft.toggle(); Up.open && Up.toggle(); this.render(); }
+    elGoals.style.display = this.panelOpen ? 'block' : 'none';
+  },
+
+  renderInto(container, withTitle) {
+    container.textContent = '';
+    if (withTitle) {
+      const title = document.createElement('b');
+      title.textContent = "🎯 Today's Goals (" + this.doneCount() + '/' + this.goals.length + ')';
+      container.appendChild(title);
+    }
+    for (const g of this.goals) {
+      const d = document.createElement('div');
+      if (g.done) d.className = 'done';
+      d.textContent = (g.done ? '✅ ' : '▫️ ') + this.text(g.def) +
+        (!g.done && g.def.n > 1 ? '  ' + g.progress + '/' + g.def.n : '');
+      container.appendChild(d);
+    }
+  },
+
   render() {
-    if (!this.goal) return;
-    elGoal.textContent = (this.done ? '✅ ' : '🎯 ') + "Today's Goal: " + this.text() +
-      (this.done ? ' — DONE!' : (this.goal.n > 1 ? '  ·  ' + this.progress + '/' + this.goal.n : ''));
-    elGoal.classList.toggle('done', this.done);
-    elGoalMenu.textContent = "🎯 Today's Goal: " + this.text();
+    if (!this.goals.length) return;
+    const done = this.doneCount(), total = this.goals.length;
+    elGoal.textContent = (done === total ? '✅ ' : '🎯 ') + done + '/' + total +
+      " Today's Goals" + (done === total ? ' — ALL DONE!' : '  ·  G for list');
+    elGoal.classList.toggle('done', done === total);
+    this.renderInto(elGoalMenu, false);
+    if (this.panelOpen) this.renderInto(elGoals, true);
   },
 };
 
@@ -2723,7 +2780,7 @@ const Craft = {
 
   toggle() {
     this.open = !this.open;
-    if (this.open) { Inv.open && Inv.toggle(); Up.open && Up.toggle(); this.render(); }
+    if (this.open) { Inv.open && Inv.toggle(); Up.open && Up.toggle(); Goals.panelOpen && Goals.toggle(); this.render(); }
     elCraft.style.display = this.open ? 'block' : 'none';
   },
 
@@ -2790,7 +2847,7 @@ const Up = {
 
   toggle() {
     this.open = !this.open;
-    if (this.open) { Inv.open && Inv.toggle(); Craft.open && Craft.toggle(); this.render(); }
+    if (this.open) { Inv.open && Inv.toggle(); Craft.open && Craft.toggle(); Goals.panelOpen && Goals.toggle(); this.render(); }
     elUpshop.style.display = this.open ? 'block' : 'none';
   },
 
@@ -2851,6 +2908,7 @@ const elName = document.getElementById('nameInput');
 const elCharGrid = document.getElementById('charGrid');
 const elGoal = document.getElementById('goal');
 const elGoalMenu = document.getElementById('goalMenu');
+const elGoals = document.getElementById('goals');
 const elInv = document.getElementById('inv');
 const elCraft = document.getElementById('craft');
 const elUpshop = document.getElementById('upshop');
@@ -3054,6 +3112,7 @@ if (IS_TOUCH) {
   bind('btnInv', () => Inv.toggle(), null);
   bind('btnCraft', () => Craft.toggle(), null);
   bind('btnUp', () => Up.toggle(), null);
+  bind('btnGoals', () => Goals.toggle(), null);
 }
 
 /* ------------- gamepad (Bluetooth / USB controllers) -------------- */

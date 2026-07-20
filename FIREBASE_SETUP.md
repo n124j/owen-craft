@@ -35,12 +35,16 @@ world from the same seed, so the database only carries tiny messages.
 ```json
 {
   "rules": {
-    ".read": "auth != null",
+    ".read": false,
     ".write": false,
     "players": {
-      "$uid": { ".write": "auth != null && auth.uid === $uid" }
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
     },
     "arena": {
+      ".read": "auth != null",
       "players": {
         "$uid": { ".write": "auth != null && auth.uid === $uid" }
       },
@@ -52,6 +56,7 @@ world from the same seed, so the database only carries tiny messages.
       }
     },
     "world": {
+      ".read": "auth != null",
       "edits": {
         "$chunk": { ".write": "auth != null" }
       }
@@ -60,9 +65,15 @@ world from the same seed, so the database only carries tiny messages.
 }
 ```
 
-These rules mean: only signed-in players can read anything; each player can only
-write their own presence/profile; chat messages can't be edited after sending; and
-any signed-in player may place/break blocks.
+(This same JSON lives in `database.rules.json` at the repo root, so it stays
+version-controlled — copy/paste it into the Rules tab whenever it changes.)
+
+These rules mean: signed-in players can see the shared world (`arena/*` for other
+players and chat, `world/edits` for block changes), but each player's own
+`players/$uid` data (profile, inventory) is only readable by that player, not by
+everyone else who's signed in. Each player can only write their own
+presence/profile/inventory; chat messages can't be edited after sending; and any
+signed-in player may place/break blocks.
 
 ## 5. Put your config into environment variables (never in the code)
 

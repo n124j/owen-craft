@@ -1,0 +1,30 @@
+{
+  "rules": {
+    ".read": false,
+    ".write": false,
+    "players": {
+      "$uid": {
+        ".read": "auth != null && auth.uid === $uid",
+        ".write": "auth != null && auth.uid === $uid"
+      }
+    },
+    "arena": {
+      ".read": "auth != null",
+      "players": {
+        "$uid": { ".write": "auth != null && auth.uid === $uid" }
+      },
+      "chat": {
+        "$msg": {
+          ".write": "auth != null && !data.exists() && newData.child('uid').val() === auth.uid",
+          ".validate": "newData.child('text').isString() && newData.child('text').val().length <= 200 && newData.child('name').isString() && newData.child('name').val().length <= 16"
+        }
+      }
+    },
+    "world": {
+      ".read": "auth != null",
+      "edits": {
+        "$chunk": { ".write": "auth != null" }
+      }
+    }
+  }
+}
