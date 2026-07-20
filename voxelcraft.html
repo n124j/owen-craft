@@ -409,6 +409,19 @@ const touchIn = { f: 0, s: 0, jump: false, sprint: false };
 // Bluetooth / USB controllers via the Gamepad API (filled by pollGamepad)
 const padIn = { f: 0, s: 0, jump: false, sprint: false };
 
+// Smart-TV browsers (LG webOS, Samsung Tizen, Android/Google TV, Fire TV, HbbTV...)
+// have no mouse, so lighter defaults help, same as touch.
+const IS_TV = /Tizen|Web0S|WebOS|SmartTV|SMART-TV|GoogleTV|AFT[A-Z]?\d|CrKey|HbbTV|VIDAA|NetCast|BRAVIA/i
+  .test(navigator.userAgent) ||
+  (window.matchMedia && matchMedia('(hover: none) and (pointer: none)').matches);
+if (IS_TV) CFG.renderDist = 6;
+// Devices with no real mouse (touch, or a TV with no Pointer Lock support) can't
+// rely on the browser ever firing 'pointerlockchange' — drive play/pause manually
+// instead of waiting on it. Re-checked with a timeout fallback at Play time below,
+// so this also self-corrects for TV browsers this UA/media-query sniff misses.
+let manualLock = IS_TOUCH || IS_TV ||
+  !(Element.prototype.requestPointerLock && document.exitPointerLock);
+
 /* ================================================================== */
 /*  TEX — procedural pixel-art texture atlas (DataArrayTexture)       */
 /* ================================================================== */
@@ -1039,7 +1052,7 @@ function emitCross(tgt, x, y, z, layer) {
 THREE.ColorManagement.enabled = false;   // keep raw sRGB values end-to-end
 const renderer = new THREE.WebGLRenderer({ antialias: false, powerPreference: 'high-performance' });
 renderer.outputColorSpace = THREE.LinearSRGBColorSpace;
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, IS_TOUCH ? 1.2 : 1.5));
+renderer.setPixelRatio(Math.min(window.devicePixelRatio, (IS_TOUCH || IS_TV) ? 1.2 : 1.5));
 renderer.setSize(window.innerWidth, window.innerHeight);
 document.body.appendChild(renderer.domElement);
 
@@ -1384,6 +1397,8 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyK' && locked) Up.toggle();
   if (e.code === 'KeyG' && locked) Goals.toggle();
   if (e.code === 'KeyH' && locked) Inv.eatBread();
+  // Real Pointer Lock auto-exits on Escape natively; manual-lock mode (touch/TV) needs it wired up.
+  if (e.code === 'Escape' && locked && manualLock) setPlaying(false);
   if (e.code === 'Space') e.preventDefault();
 });
 window.addEventListener('keyup', e => { keys[KEYALIAS[e.code] || e.code] = false; });
@@ -2898,6 +2913,7 @@ const elInfo = document.getElementById('info');
 const elSelName = document.getElementById('selname');
 const elHotbar = document.getElementById('hotbar');
 const elPlay = document.getElementById('playBtn');
+let playAutoFocused = false;   // focus Play once, so a TV remote's first OK press hits it
 const elLoad = document.getElementById('loadMsg');
 const elWaterFx = document.getElementById('waterfx');
 const elAuthErr = document.getElementById('authErr');
@@ -3167,7 +3183,7 @@ function pollGamepad(dt) {
     if (nextHot) setHotbarSel(hotbarSel + 1);
   }
   if (pauseEdge && locked) {
-    if (IS_TOUCH) setPlaying(false);
+    if (manualLock) setPlaying(false);
     else document.exitPointerLock();
   }
 }
@@ -3194,11 +3210,24 @@ elPlay.addEventListener('click', () => {
     player.yaw = Math.atan2(-(gen.vx - 0.5), -(gen.vz - 0.5));
     spawned = true;
   }
-  if (IS_TOUCH) setPlaying(true);
-  else renderer.domElement.requestPointerLock();
+  if (manualLock) {
+    setPlaying(true);
+  } else {
+    renderer.domElement.requestPointerLock();
+    // Some smart-TV / embedded browsers expose requestPointerLock() but never
+    // actually engage it (there's no mouse to lock). If nothing happened
+    // shortly after asking, fall back to manual play mode instead of leaving
+    // the player stuck on the overlay forever.
+    setTimeout(() => {
+      if (!locked && document.pointerLockElement !== renderer.domElement) {
+        manualLock = true;
+        setPlaying(true);
+      }
+    }, 1000);
+  }
 });
 document.addEventListener('pointerlockchange', () => {
-  if (IS_TOUCH) return;
+  if (manualLock) return;
   setPlaying(document.pointerLockElement === renderer.domElement);
 });
 
@@ -3277,7 +3306,10 @@ function updateHud() {
       for (const ch of ChunkManager.store.values()) if (ch.meshes.length) n++;
       const ready = ChunkManager.surfaceY(0, 0) > 0 &&
         (ChunkManager.store.get('0,0') || { meshes: [] }).meshes.length > 0;
-      if (ready) { elPlay.disabled = false; elPlay.textContent = 'Play'; elLoad.textContent = 'World ready!'; }
+      if (ready) {
+        elPlay.disabled = false; elPlay.textContent = 'Play'; elLoad.textContent = 'World ready!';
+        if (!playAutoFocused) { playAutoFocused = true; elPlay.focus(); }
+      }
       else elLoad.textContent = 'Generating world… ' + Math.min(99, Math.round(n / total * 100)) + '%';
     }
     return;
