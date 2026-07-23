@@ -24,6 +24,14 @@
       ".read": "auth != null",
       "edits": {
         "$chunk": { ".write": "auth != null" }
+      },
+      "signs": {
+        "$chunk": {
+          "$idx": {
+            ".write": "auth != null",
+            ".validate": "newData.val() === null || (newData.isString() && newData.val().length <= 24)"
+          }
+        }
       }
     }
   }

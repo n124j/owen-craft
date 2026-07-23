@@ -127,6 +127,16 @@
   #chatInput { display:none; width:100%; font:13px Consolas, monospace; padding:6px 8px;
     border-radius:4px; border:1px solid #46536b; background:rgba(10,15,24,.85); color:#fff;
     outline:none; pointer-events:auto; }
+
+  /* ---------- sign text prompt ---------- */
+  #signPrompt { position:absolute; left:50%; top:40%; transform:translate(-50%,-50%);
+    display:none; background:rgba(8,12,20,.88); border:1px solid rgba(255,215,110,.5);
+    border-radius:10px; padding:16px 20px; text-align:center; z-index:20; pointer-events:auto; }
+  #signPrompt b { color:#ffd76e; display:block; margin-bottom:8px; font:14px Verdana, sans-serif; }
+  #signInput { width:300px; max-width:70vw; font:14px Consolas, monospace; padding:7px 10px;
+    border-radius:4px; border:1px solid #46536b; background:rgba(10,15,24,.9); color:#fff;
+    outline:none; }
+  #signPrompt .hint { margin-top:6px; color:#8fa4bd; font:11px Consolas, monospace; }
   #map { position:absolute; right:10px; top:10px; width:160px; height:160px;
     border:2px solid rgba(255,255,255,.28); border-radius:8px;
     background:rgba(8,12,20,.55); image-rendering:pixelated; }
@@ -314,6 +324,11 @@
     <div id="chatlog"></div>
     <input id="chatInput" maxlength="200" placeholder="Chat — Enter to send, Esc to close" autocomplete="off">
   </div>
+  <div id="signPrompt">
+    <b>✍️ Write your sign</b>
+    <input id="signInput" maxlength="24" placeholder="Sign text…" autocomplete="off">
+    <div class="hint">Enter to place · Esc to cancel</div>
+  </div>
   <div id="touchui">
     <div id="joy"><div id="joyKnob"></div></div>
     <button id="btnJump" class="tbtn">⬆</button>
@@ -393,18 +408,27 @@ const B = { AIR:0, GRASS:1, DIRT:2, STONE:3, SAND:4, SANDSTONE:5, SNOW:6,
   // Torch: TORCH is the "in hand" item (hotbar/inventory); the four TORCH_*
   // variants are what actually gets stored per-voxel once mounted, so the
   // wall it's hanging on survives a chunk reload / remote sync.
-  TORCH:28, TORCH_XP:29, TORCH_XN:30, TORCH_ZP:31, TORCH_ZN:32 };
-const NUM_BLOCKS = 33;
+  TORCH:28, TORCH_XP:29, TORCH_XN:30, TORCH_ZP:31, TORCH_ZN:32,
+  BED:33,
+  // Sign: same in-hand-item / mounted-variant split as torches (see above),
+  // so a sign's wall and facing direction survive a chunk reload / remote sync.
+  SIGN:34, SIGN_XP:35, SIGN_XN:36, SIGN_ZP:37, SIGN_ZN:38 };
+const NUM_BLOCKS = 39;
 
 const BLOCK_NAMES = ['Air','Grass','Dirt','Stone','Sand','Sandstone','Snow',
   'Snowy Grass','Water','Oak Log','Oak Leaves','Pine Log','Pine Needles','Cactus',
   'Planks','Dark Planks','Cobblestone','Path','Farmland','Bedrock','Ice','Gravel',
   'Rose','Marigold','Tall Grass','Dead Bush','Wheat','Crafting Table',
-  'Torch','Torch','Torch','Torch','Torch'];
+  'Torch','Torch','Torch','Torch','Torch','Bed',
+  'Sign','Sign','Sign','Sign','Sign'];
 
 // World-cell -> outward-facing direction for each mounted torch variant
 // (the direction the flame points away from the wall it's stuck to).
 const TORCH_DIR = { 29:[1,0], 30:[-1,0], 31:[0,1], 32:[0,-1] };
+
+// World-cell -> outward-facing direction for each mounted sign variant
+// (the direction the sign's text faces, away from the wall it's stuck to).
+const SIGN_DIR = { 35:[1,0], 36:[-1,0], 37:[0,1], 38:[0,-1] };
 
 // Texture layers (index into the array texture)
 // 0 grass_top 1 grass_side 2 dirt 3 stone 4 sand 5 sandstone 6 snow 7 snowgrass_side
@@ -412,14 +436,15 @@ const TORCH_DIR = { 29:[1,0], 30:[-1,0], 31:[0,1], 32:[0,-1] };
 // 14 cactus_side 15 cactus_top 16 planks 17 darkplanks 18 cobble 19 path
 // 20 farmland 21 bedrock 22 ice 23 gravel 24 flower_r 25 flower_y 26 tallgrass
 // 27 deadbush 28 wheat 29 crafting_top 30 crafting_side 31 torch icon
-const NUM_LAYERS = 32;
+// 32 bed_top 33 bed_side 34 sign icon
+const NUM_LAYERS = 35;
 
 // Per-block face layers [+x,-x,+y,-y,+z,-z]; a number means "all faces"
 const FACE_DEF = { 1:[1,1,0,2,1,1], 2:2, 3:3, 4:4, 5:5, 6:6, 7:[7,7,6,2,7,7],
   8:8, 9:[9,9,10,10,9,9], 10:12, 11:[11,11,10,10,11,11], 12:13,
   13:[14,14,15,15,14,14], 14:16, 15:17, 16:18, 17:[2,2,19,2,2,2],
   18:[2,2,20,2,2,2], 19:21, 20:22, 21:23, 22:24, 23:25, 24:26, 25:27, 26:28,
-  27:[30,30,29,16,30,30], 28:31 };
+  27:[30,30,29,16,30,30], 28:31, 33:[33,33,32,16,33,33], 34:34 };
 
 const FACELAYER = new Int16Array(NUM_BLOCKS * 6);
 const OPAQUE = new Uint8Array(NUM_BLOCKS);   // fully culls neighbours (also = collidable)
@@ -427,7 +452,8 @@ const CROSS  = new Uint8Array(NUM_BLOCKS);   // X-shaped plants
 for (let id = 1; id < NUM_BLOCKS; id++) {
   const f = FACE_DEF[id];
   for (let k = 0; k < 6; k++) FACELAYER[id*6+k] = Array.isArray(f) ? f[k] : f;
-  if (id === B.TORCH || TORCH_DIR[id]) continue;   // torches: custom-rendered, walk-through
+  // torches & signs: custom-rendered, walk-through (not part of the greedy mesh)
+  if (id === B.TORCH || TORCH_DIR[id] || id === B.SIGN || SIGN_DIR[id]) continue;
   if (id >= B.FLOWER_R && id <= B.WHEAT) CROSS[id] = 1;
   else if (id !== B.WATER) OPAQUE[id] = 1;
 }
@@ -547,6 +573,19 @@ const atlasData = new Uint8Array(NUM_LAYERS * 16 * 16 * 4);
     if (d < 6.5) return [255,214+(n-.5)*20,90];                       // flame core
     if (d < 11) return [244,140+(n-.5)*20,40];                        // flame edge
     return [0,0,0,0];
+  });
+  fill(32,(x,y,n) => y > 12                                           // bed top: quilt + pillow
+    ? [236+(n-.5)*10,236+(n-.5)*10,240]
+    : [176+(n-.5)*22,46+(n-.5)*14,46+(n-.5)*14]);
+  fill(33,(x,y,n) => {                                                // bed side: sheet + frame
+    if (y > 12) return [176+(n-.5)*20,44+(n-.5)*12,44+(n-.5)*12];
+    if (y < 3)  return [120+(n-.5)*16,86+(n-.5)*12,52];
+    return [232+(n-.5)*10,232+(n-.5)*10,236];
+  });
+  fill(34,(x,y,n) => {                                                // sign (icon only)
+    if (x<2||x>13||y<3||y>12) return [92,64,34];                      // dark frame
+    if ((y===8||y===6) && x>3 && x<12) return [58,40,22];             // text dashes
+    return [176+(n-.5)*16,133+(n-.5)*14,84+(n-.5)*10];
   });
 })();
 
@@ -1247,6 +1286,99 @@ const Torches = {
   },
 };
 
+/* -------------------------- signs ----------------------------------- */
+// A small wooden board mounted flush against a wall, like a torch, but
+// carrying player-written text rendered onto a canvas texture. Board
+// geometry is a shared singleton; only the text plane's material (and thus
+// texture) varies per instance, cached by text so repeated messages reuse it.
+const SIGN_BOARD_GEO = new THREE.BoxGeometry(0.9, 0.5, 0.08);
+const SIGN_BOARD_MAT = new THREE.MeshBasicMaterial({ color: 0xa9793f });
+const SIGN_PLANE_GEO = new THREE.PlaneGeometry(0.8, 0.4);
+const signTextTexCache = new Map();   // text -> THREE.CanvasTexture
+
+function signTextTexture(text) {
+  let tex = signTextTexCache.get(text);
+  if (tex) return tex;
+  const cv = document.createElement('canvas');
+  cv.width = 128; cv.height = 64;
+  const c = cv.getContext('2d');
+  c.textAlign = 'center';
+  c.textBaseline = 'middle';
+  c.fillStyle = '#2a1c0e';
+  let size = 22;
+  c.font = 'bold ' + size + 'px Consolas, monospace';
+  while (size > 8 && c.measureText(text).width > 116) {
+    size -= 2;
+    c.font = 'bold ' + size + 'px Consolas, monospace';
+  }
+  c.fillText(text, 64, 34);
+  tex = new THREE.CanvasTexture(cv);
+  tex.magFilter = THREE.NearestFilter;
+  signTextTexCache.set(text, tex);
+  return tex;
+}
+
+/** dir: outward-facing [dx,dz], same convention as TORCH_DIR. */
+function makeSignMesh(dir, text) {
+  const g = new THREE.Group();
+  const board = new THREE.Mesh(SIGN_BOARD_GEO, SIGN_BOARD_MAT);
+  const plane = new THREE.Mesh(SIGN_PLANE_GEO,
+    new THREE.MeshBasicMaterial({ map: signTextTexture(text || ''), transparent: true }));
+  plane.position.z = 0.045;
+  g.add(board, plane);
+  g.rotation.y = Math.atan2(dir[0], dir[1]);
+  return { group: g, plane };
+}
+
+// Registry of every currently-loaded (meshed) sign, keyed by world position —
+// lets freshly-arrived text (from Firebase, or another chunk load order) patch
+// an already-built mesh in place instead of waiting for a remesh.
+const Signs = {
+  active: new Map(),      // "x,y,z" -> {mesh, plane, x, y, z, key}
+  textCache: new Map(),   // "x,y,z" -> text
+
+  key(x, y, z) { return x + ',' + y + ',' + z; },
+  textOf(x, y, z) { return this.textCache.get(this.key(x, y, z)) || ''; },
+
+  /** Update text locally and (if a mesh is currently loaded) refresh its texture. */
+  applyText(x, y, z, text) {
+    const key = this.key(x, y, z);
+    this.textCache.set(key, text);
+    const rec = this.active.get(key);
+    if (rec) { rec.plane.material.map = signTextTexture(text); rec.plane.material.needsUpdate = true; }
+  },
+
+  /** Called right after placing a sign: updates locally + shares with everyone. */
+  place(x, y, z, text) {
+    this.applyText(x, y, z, text);
+    if (!Net.joined) return;
+    const cx = x >> 4, cz = z >> 4;
+    const idx = ((((x & 15) << 4) | (z & 15)) << 8) + y;
+    update(ref(Net.db, 'world/signs/' + cx + '_' + cz), { [idx]: text });
+  },
+
+  /** Called when the sign block itself is broken, so the DB doesn't grow stale entries. */
+  clear(x, y, z) {
+    this.textCache.delete(this.key(x, y, z));
+    if (!Net.joined) return;
+    const cx = x >> 4, cz = z >> 4;
+    const idx = ((((x & 15) << 4) | (z & 15)) << 8) + y;
+    update(ref(Net.db, 'world/signs/' + cx + '_' + cz), { [idx]: null });
+  },
+
+  /** Incoming from Firebase: 'world/signs/{cx}_{cz}' -> {idx: text}. */
+  onRemote(key, map) {
+    if (!map) return;
+    const p = key.split('_');
+    const cx = +p[0], cz = +p[1];
+    if (!Number.isFinite(cx) || !Number.isFinite(cz)) return;
+    for (const k in map) {
+      const idx = +k, y = idx & 255;
+      this.applyText(cx * 16 + (idx >>> 12), y, cz * 16 + ((idx >>> 8) & 15), map[k] || '');
+    }
+  },
+};
+
 /* ------------------------- ChunkManager -------------------------- */
 const ChunkManager = {
   store: new Map(),      // key -> {cx,cz,blocks,heights,biomes,meshes}
@@ -1287,6 +1419,7 @@ const ChunkManager = {
       if (Math.max(Math.abs(ch.cx - pcx), Math.abs(ch.cz - pcz)) > R + 2) {
         for (const m of ch.meshes) { scene.remove(m); m.geometry.dispose(); }
         if (ch.torches) for (const t of ch.torches) { scene.remove(t.mesh); Torches.active.delete(t.key); }
+        if (ch.signs) for (const t of ch.signs) { scene.remove(t.mesh); Signs.active.delete(t.key); }
         this.store.delete(k);
         this.requested.delete(k);
         this.meshQueue.delete(ch);
@@ -1364,6 +1497,7 @@ const ChunkManager = {
     this.addMesh(ch, m.wa, matWater, 1);
     this.addMesh(ch, m.fo, matFoliage, 0);
     this.rebuildTorches(ch);
+    this.rebuildSigns(ch);
   },
 
   /** Torches aren't part of the greedy mesh — rescan this chunk's blocks
@@ -1386,6 +1520,30 @@ const ChunkManager = {
         const rec = { mesh, x, y: y + 0.5, z, key };
         ch.torches.push(rec);
         Torches.active.set(key, rec);
+      }
+    }
+  },
+
+  /** Signs aren't part of the greedy mesh either — rescan for SIGN_* variants
+   *  and (re)spawn their little board+text props. */
+  rebuildSigns(ch) {
+    if (ch.signs) for (const t of ch.signs) { scene.remove(t.mesh); Signs.active.delete(t.key); }
+    ch.signs = [];
+    const bl = ch.blocks;
+    for (let lx = 0; lx < 16; lx++) for (let lz = 0; lz < 16; lz++) {
+      const base = ((lx << 4) | lz) << 8;
+      for (let y = 1; y < 256; y++) {
+        const dir = SIGN_DIR[bl[base + y]];
+        if (!dir) continue;
+        const wx = ch.cx * 16 + lx, wz = ch.cz * 16 + lz;
+        const text = Signs.textOf(wx, y, wz);
+        const { group, plane } = makeSignMesh(dir, text);
+        group.position.set(wx + 0.5 - dir[0] * 0.42, y + 0.5, wz + 0.5 - dir[1] * 0.42);
+        scene.add(group);
+        const key = wx + ',' + y + ',' + wz;
+        const rec = { mesh: group, plane, x: wx, y, z: wz, key };
+        ch.signs.push(rec);
+        Signs.active.set(key, rec);
       }
     }
   },
@@ -1476,6 +1634,45 @@ const ChunkManager = {
 };
 ChunkManager.init();
 
+/* ------------------------- water flow ----------------------------- */
+// Water spreads into newly-emptied air that's touching it — sideways, or
+// falling in from directly above — never upward. A bounded flood-fill:
+// each dig seeds its own spot, conversions cascade to their neighbours, and
+// a cap on the pending queue keeps any one pocket from flooding forever.
+// Only the player who did the digging runs this locally; everyone else just
+// sees the resulting block edits sync in, so nobody double-simulates it.
+const WaterFlow = {
+  queue: [],
+  queued: new Set(),
+  lastTick: 0,
+
+  push(x, y, z) {
+    const key = x + ',' + y + ',' + z;
+    if (this.queued.has(key) || this.queue.length >= 400) return;
+    this.queued.add(key);
+    this.queue.push([x, y, z, key]);
+  },
+
+  tick(now) {
+    if (now - this.lastTick < 120 || this.queue.length === 0) return;
+    this.lastTick = now;
+    const n = Math.min(24, this.queue.length);
+    for (let i = 0; i < n; i++) {
+      const [x, y, z, key] = this.queue.shift();
+      this.queued.delete(key);
+      if (ChunkManager.getBlock(x, y, z) !== B.AIR) continue;
+      const fed = ChunkManager.getBlock(x, y + 1, z) === B.WATER ||
+        ChunkManager.getBlock(x + 1, y, z) === B.WATER || ChunkManager.getBlock(x - 1, y, z) === B.WATER ||
+        ChunkManager.getBlock(x, y, z + 1) === B.WATER || ChunkManager.getBlock(x, y, z - 1) === B.WATER;
+      if (!fed || !ChunkManager.setBlock(x, y, z, B.WATER)) continue;
+      Net.sendEdit(x, y, z, B.WATER);
+      this.push(x, y - 1, z);
+      this.push(x + 1, y, z); this.push(x - 1, y, z);
+      this.push(x, y, z + 1); this.push(x, y, z - 1);
+    }
+  },
+};
+
 /* ================================================================== */
 /*  PLAY — first-person controller, physics, block interaction        */
 /* ================================================================== */
@@ -1496,7 +1693,7 @@ let locked = false;
 let spawned = false;
 
 window.addEventListener('keydown', e => {
-  if (Chat.open) return;                    // typing in chat, not playing
+  if (Chat.open || SignUI.open) return;      // typing in chat/sign prompt, not playing
   if (locked && (e.code === 'KeyT' || e.code === 'Enter')) {
     e.preventDefault();
     Chat.openBox();
@@ -1648,7 +1845,8 @@ function raycast(maxD) {
 }
 
 /* -------------------- break / place blocks ----------------------- */
-const HOTBAR = [B.GRASS, B.DIRT, B.STONE, B.COBBLE, B.PLANKS, B.LOG, B.LEAVES, B.SAND, B.CRAFTING, B.TORCH];
+const HOTBAR = [B.GRASS, B.DIRT, B.STONE, B.COBBLE, B.PLANKS, B.LOG, B.LEAVES, B.SAND, B.CRAFTING, B.TORCH,
+  B.BED, B.SIGN];
 let hotbarSel = 0;
 
 window.addEventListener('contextmenu', e => e.preventDefault());
@@ -1658,12 +1856,14 @@ function reachDist() { return (Inv.items['Iron Pickaxe'] ? 8 : 6) + Inv.up.reach
 
 /** Break the block under the crosshair (mouse click or touch button). */
 function doBreak() {
-  if (!locked || Chat.open) return;
+  if (!locked || Chat.open || SignUI.open) return;
   const hit = raycast(reachDist());
   if (!hit || hit.id === B.BEDROCK) return;
   SND.dig(hit.id);
+  if (SIGN_DIR[hit.id]) Signs.clear(hit.x, hit.y, hit.z);
   ChunkManager.setBlock(hit.x, hit.y, hit.z, B.AIR);
   Net.sendEdit(hit.x, hit.y, hit.z, B.AIR);
+  WaterFlow.push(hit.x, hit.y, hit.z);
   // tool powers: matching tool doubles the drop
   const mat = SND.mat(hit.id);
   const shovelly = [B.SAND, B.DIRT, B.GRASS, B.SNOW, B.SNOWGRASS, B.GRAVEL, B.PATH, B.FARMLAND];
@@ -1678,6 +1878,7 @@ function doBreak() {
   if (CROSS[aboveId]) {
     ChunkManager.setBlock(hit.x, hit.y + 1, hit.z, B.AIR);
     Net.sendEdit(hit.x, hit.y + 1, hit.z, B.AIR);
+    WaterFlow.push(hit.x, hit.y + 1, hit.z);
     Inv.addItem(BLOCK_NAMES[aboveId]);
     Inv.addXP(2 * xpMult);
   }
@@ -1705,13 +1906,49 @@ function doPlaceTorch(hit) {
   }
 }
 
+/** Signs only mount on the side of a solid block, same as torches — but placing
+ *  one first opens a text prompt, so the actual block edit happens on confirm. */
+function doPlaceSignPrompt(hit) {
+  if (hit.ny !== 0 || !OPAQUE[hit.id]) {
+    Chat.system("Signs need a solid wall — aim at the side of a block, not the top");
+    return;
+  }
+  const px = hit.x + hit.nx, py = hit.y + hit.ny, pz = hit.z + hit.nz;
+  if (ChunkManager.getBlock(px, py, pz) !== B.AIR) return;
+  if (Inv.count('Sign') < 1) {
+    SND.tone(0.15, 0.08, 180, 120, 'square');
+    Chat.system('No Sign in your bag — craft one (C)');
+    return;
+  }
+  const variant = hit.nx === 1 ? B.SIGN_XP : hit.nx === -1 ? B.SIGN_XN
+                : hit.nz === 1 ? B.SIGN_ZP : B.SIGN_ZN;
+  SignUI.show({ px, py, pz, variant });
+}
+
+/** Confirmed from the sign text prompt — actually places the block. */
+function finishPlaceSign(p, text) {
+  if (!p) return;
+  if (ChunkManager.getBlock(p.px, p.py, p.pz) !== B.AIR) {
+    Chat.system('Something got built there — sign not placed');
+    return;
+  }
+  if (Inv.count('Sign') < 1) return;
+  if (ChunkManager.setBlock(p.px, p.py, p.pz, p.variant)) {
+    SND.place(p.variant);
+    Net.sendEdit(p.px, p.py, p.pz, p.variant);
+    Signs.place(p.px, p.py, p.pz, text);
+    Inv.addItem('Sign', -1);
+  }
+}
+
 /** Place the held block against the face under the crosshair. */
 function doPlace() {
-  if (!locked || Chat.open) return;
+  if (!locked || Chat.open || SignUI.open) return;
   const hit = raycast(reachDist());
   if (!hit) return;
   const id = HOTBAR[hotbarSel];
   if (id === B.TORCH) { doPlaceTorch(hit); return; }
+  if (id === B.SIGN) { doPlaceSignPrompt(hit); return; }
   const px = hit.x + hit.nx, py = hit.y + hit.ny, pz = hit.z + hit.nz;
   const cur = ChunkManager.getBlock(px, py, pz);
   if (cur !== B.AIR && cur !== B.WATER && !CROSS[cur]) return;
@@ -2156,6 +2393,10 @@ const Net = {
     onChildAdded(ed, s => this.onEdits(s.key, s.val()));
     onChildChanged(ed, s => this.onEdits(s.key, s.val()));
 
+    const sg = ref(this.db, 'world/signs');
+    onChildAdded(sg, s => Signs.onRemote(s.key, s.val()));
+    onChildChanged(sg, s => Signs.onRemote(s.key, s.val()));
+
     onChildAdded(query(ref(this.db, 'arena/chat'), limitToLast(40)), s => Chat.add(s.val()));
 
     // restore this player's inventory + today's goal progress
@@ -2304,6 +2545,34 @@ const Chat = {
   close() { this.open = false; elChatInput.value = ''; elChatInput.style.display = 'none'; elChatInput.blur(); },
 };
 
+/** Text prompt shown when placing a Sign — mirrors Chat's open/close flow. */
+const SignUI = {
+  open: false,
+  pending: null,     // {px, py, pz, variant}
+
+  show(pending) {
+    this.open = true;
+    this.pending = pending;
+    for (const k in keys) keys[k] = false;   // stop walking while typing
+    elSignPrompt.style.display = 'block';
+    elSignInput.value = '';
+    elSignInput.focus();
+  },
+  close() {
+    this.open = false;
+    this.pending = null;
+    elSignPrompt.style.display = 'none';
+    elSignInput.value = '';
+    elSignInput.blur();
+  },
+  confirm() {
+    const text = elSignInput.value.trim().slice(0, 24);
+    const pending = this.pending;
+    this.close();
+    finishPlaceSign(pending, text);
+  },
+};
+
 /* ================================================================== */
 /*  SFX — procedural sound (Web Audio API, no audio files needed)     */
 /*  Every effect is synthesized from oscillators + filtered noise.    */
@@ -2392,7 +2661,8 @@ const SND = {
     if (id === B.STONE || id === B.COBBLE || id === B.SANDSTONE || id === B.BEDROCK ||
         id === B.GRAVEL || id === B.ICE) return 'stone';
     if (id === B.LOG || id === B.PINELOG || id === B.PLANKS || id === B.DARKPLANKS ||
-        id === B.CACTUS || id === B.TORCH || TORCH_DIR[id]) return 'wood';
+        id === B.CACTUS || id === B.TORCH || TORCH_DIR[id] ||
+        id === B.BED || id === B.SIGN || SIGN_DIR[id]) return 'wood';
     if (id === B.SAND) return 'sand';
     if (id === B.SNOW || id === B.SNOWGRASS) return 'snow';
     if (id === B.LEAVES || id === B.PINELEAVES || CROSS[id]) return 'leaf';
@@ -2687,7 +2957,7 @@ const Items = {
   },
 };
 
-const ITEM_EMOJI = { Bread: '🍞', Marigold: '🌼', Rose: '🌹', Wheat: '🌾', Torch: '🔥' };
+const ITEM_EMOJI = { Bread: '🍞', Marigold: '🌼', Rose: '🌹', Wheat: '🌾', Torch: '🔥', Bed: '🛏️', Sign: '🪧' };
 
 const Inv = {
   items: {}, picked: {}, open: false, dirty: false, lastSave: 0,
@@ -3014,6 +3284,8 @@ const RECIPES = [
   { out: 'Golden Axe', n: 1, cost: { 'Sandstone': 3, 'Planks': 2 }, table: true },
   { out: 'Emerald Sword', n: 1, cost: { 'Ice': 2, 'Stone': 2, 'Planks': 1 }, table: true },
   { out: 'Torch', n: 4, cost: { 'Planks': 1 } },
+  { out: 'Bed', n: 1, cost: { 'Planks': 3, 'Dark Planks': 1 } },
+  { out: 'Sign', n: 1, cost: { 'Planks': 2 } },
 ];
 
 const Craft = {
@@ -3145,6 +3417,8 @@ const elWaterFx = document.getElementById('waterfx');
 const elAuthErr = document.getElementById('authErr');
 const elChatLog = document.getElementById('chatlog');
 const elChatInput = document.getElementById('chatInput');
+const elSignPrompt = document.getElementById('signPrompt');
+const elSignInput = document.getElementById('signInput');
 const elPlayers = document.getElementById('players');
 const elName = document.getElementById('nameInput');
 const elCharGrid = document.getElementById('charGrid');
@@ -3290,6 +3564,14 @@ elChatInput.addEventListener('keydown', e => {
 });
 elChatInput.addEventListener('blur', () => { if (Chat.open) Chat.close(); });
 
+/* --------------------- sign text prompt handling ------------------ */
+elSignInput.addEventListener('keydown', e => {
+  e.stopPropagation();
+  if (e.code === 'Enter') SignUI.confirm();
+  else if (e.code === 'Escape') SignUI.close();
+});
+elSignInput.addEventListener('blur', () => { if (SignUI.open) SignUI.close(); });
+
 /* ------------------ touch controls (mobile) ---------------------- */
 if (IS_TOUCH) {
   const joy = document.getElementById('joy');
@@ -3407,7 +3689,7 @@ function pollGamepad(dt) {
 
   const placeEdge = edge(6), prevHot = edge(4), nextHot = edge(5), pauseEdge = edge(9);
 
-  if (locked && !Chat.open) {
+  if (locked && !Chat.open && !SignUI.open) {
     // squared response curve on the right stick = fine aiming near centre
     const lx = dz(gp.axes[2] || 0), ly = dz(gp.axes[3] || 0);
     player.yaw -= lx * Math.abs(lx) * 3.4 * dt;
@@ -3503,6 +3785,7 @@ function frame(now) {
   Goals.pick();
   Items.update(now);
   Torches.updateLights(now);
+  WaterFlow.tick(now);
   Health.update(dt, now);
   Inv.autosave(now);
   Net.sendState(now);

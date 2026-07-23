@@ -59,6 +59,14 @@ world from the same seed, so the database only carries tiny messages.
       ".read": "auth != null",
       "edits": {
         "$chunk": { ".write": "auth != null" }
+      },
+      "signs": {
+        "$chunk": {
+          "$idx": {
+            ".write": "auth != null",
+            ".validate": "newData.val() === null || (newData.isString() && newData.val().length <= 24)"
+          }
+        }
       }
     }
   }
@@ -69,11 +77,12 @@ world from the same seed, so the database only carries tiny messages.
 version-controlled — copy/paste it into the Rules tab whenever it changes.)
 
 These rules mean: signed-in players can see the shared world (`arena/*` for other
-players and chat, `world/edits` for block changes), but each player's own
-`players/$uid` data (profile, inventory) is only readable by that player, not by
-everyone else who's signed in. Each player can only write their own
-presence/profile/inventory; chat messages can't be edited after sending; and any
-signed-in player may place/break blocks.
+players and chat, `world/edits` for block changes, `world/signs` for sign text),
+but each player's own `players/$uid` data (profile, inventory) is only readable
+by that player, not by everyone else who's signed in. Each player can only write
+their own presence/profile/inventory; chat messages can't be edited after
+sending; and any signed-in player may place/break blocks or write/erase signs
+(capped at 24 characters).
 
 ## 5. Put your config into environment variables (never in the code)
 
@@ -108,7 +117,8 @@ To test locally first: run a tiny server in the folder, e.g.
 ## Handy admin tricks
 
 - **Reset the world** (undo everyone's block edits): in the Realtime Database data
-  view, delete the `world/edits` node.
+  view, delete the `world/edits` node. Also delete `world/signs` if you want to
+  clear everyone's sign text too.
 - **Clear chat history**: delete `arena/chat`.
 - **Kick a stuck "ghost" player**: delete their entry under `arena/players`
   (this also happens automatically when their connection drops).
