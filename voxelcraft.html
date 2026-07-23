@@ -3765,6 +3765,7 @@ elPlay.addEventListener('click', () => {
     // the player stuck on the overlay forever.
     setTimeout(() => {
       if (!locked && document.pointerLockElement !== renderer.domElement) {
+        console.warn('[pointer lock] never engaged within 1s — falling back to manual play mode (no real mouse capture, cursor stays visible).');
         manualLock = true;
         setPlaying(true);
       }
@@ -3774,6 +3775,9 @@ elPlay.addEventListener('click', () => {
 document.addEventListener('pointerlockchange', () => {
   if (manualLock) return;
   setPlaying(document.pointerLockElement === renderer.domElement);
+});
+document.addEventListener('pointerlockerror', () => {
+  console.warn('[pointer lock] request was denied by the browser.');
 });
 
 /* --------------------------- main loop --------------------------- */
