@@ -96,6 +96,13 @@
     text-shadow:1px 1px 0 rgba(0,0,0,.4); }
   .bigbtn:hover:not(:disabled) { filter:brightness(1.12); }
   .bigbtn:disabled { filter:grayscale(.8) brightness(.7); cursor:wait; }
+
+  /* ---------- button loading spinner ---------- */
+  .bigbtn, #playBtn { display:inline-flex; align-items:center; justify-content:center; gap:10px; }
+  .btn-loading::before { content:''; width:15px; height:15px; flex:0 0 auto;
+    border:2px solid rgba(255,255,255,.35); border-top-color:#fff; border-radius:50%;
+    animation:btnspin .7s linear infinite; }
+  @keyframes btnspin { to { transform:rotate(360deg); } }
   #googleBtn { background:linear-gradient(#5b8def,#3f6fd4); border-color:#274a8f; }
   .err { color:#ff8a8a; font-size:13px; max-width:480px; text-align:center; min-height:16px; }
   .phase { display:flex; flex-direction:column; align-items:center; gap:12px; }
@@ -3405,6 +3412,12 @@ const Up = {
 /*  UI — HUD, hotbar, pointer lock, main loop, boot                   */
 /* ================================================================== */
 
+/** Show a spinner and disable a trigger button until whatever it kicked off resolves. */
+function setBtnLoading(btn, on) {
+  btn.disabled = on;
+  btn.classList.toggle('btn-loading', on);
+}
+
 const elOverlay = document.getElementById('overlay');
 const elHud = document.getElementById('hud');
 const elInfo = document.getElementById('info');
@@ -3545,9 +3558,15 @@ function uiOnAuth(user) {
   } else showPhase('signin');
 }
 
-document.getElementById('googleBtn').addEventListener('click', () => Net.signIn());
+const elGoogleBtn = document.getElementById('googleBtn');
+elGoogleBtn.addEventListener('click', () => {
+  setBtnLoading(elGoogleBtn, true);
+  Net.signIn().finally(() => setBtnLoading(elGoogleBtn, false));
+});
 document.getElementById('signoutBtn').addEventListener('click', () => Net.signOutAll());
-document.getElementById('enterBtn').addEventListener('click', () => {
+const elEnterBtn = document.getElementById('enterBtn');
+elEnterBtn.addEventListener('click', () => {
+  setBtnLoading(elEnterBtn, true);
   const name = (elName.value.trim() || 'Player').slice(0, 16);
   Net.join(name, selSkin);
   showPhase('game');
@@ -3712,6 +3731,7 @@ function pollGamepad(dt) {
 /* --------------------- play / pause flow ------------------------- */
 // Desktop uses pointer lock; touch devices just toggle the playing state.
 function setPlaying(on) {
+  setBtnLoading(elPlay, false);                // pointer-lock request (or its fallback) has settled
   locked = on;
   elOverlay.style.display = on ? 'none' : 'flex';
   elHud.style.display = on ? 'block' : 'none';
@@ -3721,6 +3741,7 @@ function setPlaying(on) {
   }
 }
 elPlay.addEventListener('click', () => {
+  setBtnLoading(elPlay, true);                 // cleared once pointer lock resolves in setPlaying()
   SND.init();                                  // audio needs a user gesture
   SND.resume();
   if (!spawned) {
