@@ -351,11 +351,11 @@
   </div>
 </div>
 
-<script type="importmap">
+<script type="importmap" data-cfasync="false">
 { "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.js" } }
 </script>
 
-<script type="module">
+<script type="module" data-cfasync="false">
 import * as THREE from 'three';
 import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js';
 import { getAuth, GoogleAuthProvider, signInWithPopup, onAuthStateChanged, signOut }
