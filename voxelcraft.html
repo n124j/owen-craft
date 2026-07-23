@@ -3741,6 +3741,10 @@ function setPlaying(on) {
   }
 }
 elPlay.addEventListener('click', () => {
+  // Request pointer lock first, untouched by any DOM change (disabling the
+  // button that currently has focus can make the browser silently refuse
+  // the lock request) — everything else can happen after in the same tick.
+  if (!manualLock) renderer.domElement.requestPointerLock();
   setBtnLoading(elPlay, true);                 // cleared once pointer lock resolves in setPlaying()
   SND.init();                                  // audio needs a user gesture
   SND.resume();
@@ -3755,7 +3759,6 @@ elPlay.addEventListener('click', () => {
   if (manualLock) {
     setPlaying(true);
   } else {
-    renderer.domElement.requestPointerLock();
     // Some smart-TV / embedded browsers expose requestPointerLock() but never
     // actually engage it (there's no mouse to lock). If nothing happened
     // shortly after asking, fall back to manual play mode instead of leaving
